@@ -12,9 +12,9 @@ class DBconnector:
         # database name to use
         self.db_name = "runoffdb"
         # username for the db access
-        self.username = "root"
+        self.username = ""
         # password of the user
-        self.pwd = "vochechule"
+        self.pwd = ""
 
     def connect(self):
         try:
