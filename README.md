@@ -20,8 +20,8 @@ On the level of recorded data of measurements are translated to Pandas dataframe
  <ul>
    <li>security - not to expose the institutional servers to any threat caused by leaked credentials</li>
  <li>data integrity - any mess-up with the data damages only the local copy and can be always be rolled-back by getting a fresh dump from the production database</li>
- <li>access issues - this way the local "sandbox" is always available regrdless of working internet connection</li>
+ <li>access issues - this way the local "sandbox" is always available regardless of working internet connection</li>
 </ul>
 
 # miner
-<p>Serves as a toolbox for loading data from the database and establish the entities (objects) structure so it can be woked with.</p>
+<p>Serves as a toolbox for loading data from the database and establish the entities (objects) structure so it can be worked with.</p>
