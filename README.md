@@ -2,7 +2,7 @@
 <p>Python framework to access the RunoffDB content via class structure reflecting the entity structure in the DB itself. The miner should provide a convenient way to get the data stored in RunoffDB in arbitrary format.</p>
 <p>The RunoffDB is an ongoing project to store experimental data in a unified and comprehensive structure that allows human editing and viewing as well as machine processing of the data.</p>
 <p>For more information visit:</br>
-website of the project https://runoffdb.fsv.cvut.cz/</br>
+website of the project https://runoffdb.fsv.cvut.cz/en</br>
 MySQL database repository https://github.com/storm-fsv-cvut/runoffDB</br>
 PHP based GUI repository https://github.com/storm-fsv-cvut/runoffDB_UI</br></p>
 
