@@ -374,7 +374,6 @@ class Run:
                     else:
                         dbcon.close()
                         return "variable"
-                    return None
             else:
                 print ("Connection to database couldn't be established")
                 return None
@@ -385,7 +384,6 @@ class Run:
     def get_records(self, phenomenon_id = None, unit_id = None, record_type_id = None):
         out = []
         # get the measurements related to Run instance, pass on the argument
-        print(f"getting records of measurements of ph_id {phenomenon_id}")
         measurements = self.get_measurements(phenomenon_id)
         # if any measurements like that exist
         if measurements:
@@ -466,8 +464,6 @@ class Run:
     #                 if recs:
     #                     if len(recs) > 0:
     #                         return recs
-
-        return None
 
     def get_terminal_velocity_value(self, time=None, record_type=None):
         found_records = self.get_records(5, [15], record_type_id=record_type)
@@ -681,6 +677,17 @@ class Record:
                     order_by = ""
 
                 query = f"SELECT {select_time}`value` AS {value_name} {more} FROM {data_table} WHERE `record_id` = {self.id}{order_by}"
+                # print(query)
+                # if self.id == 1208:
+                #     print("==================================================")
+                #     thecursor = dbcon.cursor(dictionary=True)
+                #     thecursor.execute(query)
+                #     results = thecursor.fetchall()
+                #     print(results)
+                #     for r in results:
+                #         print(f"{r['time']} - {r['rain_intensity']}")
+                #     result_dataFrame = pd.read_sql(query, dbcon)
+                # else:
                 result_dataFrame = pd.read_sql(query, dbcon)
 
                 if self.is_timeline and index_column is None:

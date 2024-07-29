@@ -34,7 +34,7 @@ class Miner:
 
         # record type priorities
         self.runoff_types_view_order = [2, 3, 4, 1, 6, 7, 5]
-        self.ss_types_tiew_order = [2, 3, 4, 1, 6, 7, 5]
+        self.ss_types_view_order = [2, 3, 4, 1, 6, 7, 5]
         # 1 - raw data
         # 2 - edited data
         # 3 - homogenized edited data
@@ -395,6 +395,7 @@ class Miner:
             results = thecursor.fetchall()
 
             if thecursor.rowcount > 0:
+                dbcon.close()
                 return results
 
             dbcon.close()
@@ -530,44 +531,50 @@ class Miner:
         if self.runs:
 
             lines = []
+            catchThem = []
             for run in self.runs.values():
                 # run.show_details()
-                print(f"\n\nrun ID {run.id}")
+                print(f"\n\nrun ID {run.id} ({czech_date(run.datetime)}, {self.localities.get(run.locality_id)['name']})")
                 headers = ["ID"]
                 notes = [""]
                 poznamky = [""]
                 line = [run.id]
-                # Contributor
+
+                headers.append("run title")
+                notes.append("")
+                poznamky.append("tohle je tu jenom teď pro nás, abysme se orientovali a snadno mohli odhality chyby")
+                line.append(f"{czech_date(run.datetime)} - {self.localities.get(run.locality_id)['name']}")
+
                 headers.append("Contributor name")
                 notes.append("")
                 poznamky.append("Co myslíš, že by mělo bejt tady? Jména odpovědnejch lidí? institucí? nebo všude my jakožto contributor do týhle iniciativy?")
                 line.append("CTU Prague")
-                # Published?
+
                 headers.append("Published?")
                 notes.append("")
                 poznamky.append("Tady nevim, jestli jako byly publikovaný ty samotný data ... nebo jde i o publikace z těch dat vycházející?")
                 line.append("n")
-                # DOI
+
                 headers.append("DOI")
                 notes.append("")
                 poznamky.append("")
                 line.append("NA")
-                # latitude
+
                 headers.append("Coordinates  lat (deg)")
                 notes.append("")
                 poznamky.append("")
                 line.append(self.localities.get(run.plot.locality_id)["lat"])
-                # longitude
+
                 headers.append("Coordinates  long (deg)")
                 notes.append("")
                 poznamky.append("")
                 line.append(self.localities.get(run.plot.locality_id)["long"])
-                # WRB soil type
+
                 headers.append("Soil Type (WRB)")
                 notes.append("")
                 poznamky.append("")
                 line.append("")
-                # clay content
+
                 headers.append("Soil Texture clay (%)")
                 headers.append("Soil Texture silt (%)")
                 headers.append("Soil Texture sand (%)")
@@ -865,29 +872,30 @@ class Miner:
                                 stone_cover = stone_cover_data["stone_cover"].mean()
                 line.append(stone_cover)
 
-                # headers.append("Rainfall (mm/h)")
-                # notes.append("")
-                # poznamky.append("")
-                # if run.rain_intensity_recid is not None:
-                #     intensity_rec = self.load_record(run.rain_intensity_recid)
-                #     intensity_rec.load_data("rain_intensity")
-                #     intensity_data = intensity_rec.get_data()
-                #     print(intensity_data)
-                #     # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
-                #     x = "*" if len(intensity_data.index)>2 else ""
-                #     line.append(str(round(intensity_data["rain_intensity"].max(), 1))+x)
-                #
-                # else:
-                #     line.append("NA")
+                headers.append("Rainfall (mm/h)")
+                notes.append("")
+                poznamky.append("")
+                if run.rain_intensity_recid is not None:
+                    intensity_rec = self.load_record(run.rain_intensity_recid)
+                    intensity_rec.load_data("rain_intensity")
+                    intensity_data = intensity_rec.get_data("rain_intensity")
+                    # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
+                    x = "*" if len(intensity_data.index) > 2 else ""
+                    line.append(str(round(intensity_data["rain_intensity"].max(), 1))+x)
+
+                else:
+                    line.append("NA")
 
                 headers.append("Rainfall (mm)")
                 notes.append("")
                 poznamky.append("")
                 rainfall_rectype = ""
+                rainfall_mm = None
                 if run.rain_intensity_recid is not None:
                     intensity_rec = self.load_record(run.rain_intensity_recid)
                     intensity_data = intensity_rec.load_data("rain_intensity")
-                    line.append(round(integrate_series(intensity_data, "rain_intensity", interpolate=False, time_unit='hours'), 0))
+                    rainfall_mm = round(integrate_series(intensity_data, "rain_intensity", interpolate=False, time_unit='hours'), 0)
+                    line.append(rainfall_mm)
                     if intensity_rec.record_type_id in [7, 8]:
                         rainfall_rectype = "Estimated"
                     elif intensity_rec.record_type_id == 5:
@@ -913,15 +921,12 @@ class Miner:
                 poznamky.append("")
 
                 # prepare column labels for dataframes
-                runoff_label = f"runoff_rate"
-                tot_runoff_label = "total_runoff"
+                runoff_label = "runoff_rate"
                 sed_conc_label = f"sediment_concentration"
                 sed_flux_label = f"sediment_flux"
-                sed_mass_label = "sediment_mass"
 
                 # initiate with NA values that will be used if no valid data is found
-                runoff_value = "NA"
-                soilloss_per_area = "NA"
+                runoff_mm = "NA"
 
                 # search for surface runoff rate record
                 runoff_data = None
@@ -941,12 +946,28 @@ class Miner:
                             # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
                             # if runoff dataframe has some data
                             if not runoff_data.empty:
-                                print(runoff_data)
-                                runoff_value = integrate_series_minutes(runoff_data, runoff_label,
+                                try:
+                                    runoff_l = integrate_series_minutes(runoff_data, runoff_label,
                                                                         zero_time=get_zero_timestamp(runoff_data, runoff_label))
+                                    runoff_mm = runoff_l/plot_area
+                                except ValueError as e:
+                                    catchThem.append(runoff_record.id)
+                                    print(f"Integration by time failed on total runoff calculation - data frame index is not TimeDelta")
                             break
 
-                line.append(runoff_value)
+                line.append(runoff_mm)
+
+                headers.append("Runoff coefficient")
+                notes.append("")
+                poznamky.append("")
+                if rainfall_mm not in (None, "NA") and runoff_mm not in (None, "NA"):
+                    line.append(runoff_mm/rainfall_mm)
+                else:
+                    line.append("NA ")
+
+                headers.append("Soil Erosion (g)")
+                notes.append("")
+                poznamky.append("")
 
                 headers.append("Soil Erosion (Mg/ha)")
                 notes.append("")
@@ -955,17 +976,14 @@ class Miner:
                 # search for sediment concentration records
                 sediment_data = None
                 # go through the record type priority list and find the first matching Record
-                for record_type in self.ss_types_tiew_order:
+                for record_type in self.ss_types_view_order:
                     # get the best sediment concentration measurement Record(s)
                     found_records = run.get_records(2, [2, 3], record_type_id = record_type)
-                    if found_records is None:
-                        print(f"run {run.id} has no measurements of suspended solids content of type {record_type}")
-                    if found_records:
+                    if found_records is not None:
                         if len(found_records) > 1:
                             print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
                                   f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
                         ss_record = found_records[0]
-                        # print(f"sediment load best record of run {run.id} is {ss_record.id} (unit: {ss_record.unit_id}, record type: {ss_record.record_type_id})")
                         # get the sediment concentration data in [g.l-1]
                         sediment_data = ss_record.get_data_in_unit(3, sed_conc_label)
                         # if sediment data exist break the search cycle
@@ -973,6 +991,9 @@ class Miner:
                             # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
                             break
 
+                # initiate with NA values that will be used if no valid data is found
+                soilloss_g = "NA"
+                soilloss_Mg_ha = "NA"
                 # if both runoff and sediment concentration data are found
                 if runoff_data is not None and sediment_data is not None:
                     # if both dataframes have some data
@@ -992,18 +1013,17 @@ class Miner:
                                 sediment_data.sort_index()
                         else:  # assign the runoff start time as t0
                             t0 = run.ttr
-                        print(f"runoff data:\n{runoff_data}\n")
-                        print(f"sediment data:\n{sediment_data}\n\n")
+                        print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
+                        print(f"sediment data (record #{ss_record.id}):\n{sediment_data}\n")
 
                         # merge the two dataframes into one with common 'time' index
                         merged_data = pd.concat([runoff_data, sediment_data], axis=1, join='outer')
                         # re-order the rows by time
-                        merged_data.sort_index(inplace=True)
-                        # merged_data.reset_index(inplace=True)
-                        # merged_data['time'] = pd.to_timedelta(merged_data['time'])
-                        # merged_data.sort_values(by='time', inplace=True)
-                        # set the time index back
-                        # merged_data.set_index('time', inplace=True)
+                        try:
+                            merged_data.sort_index(inplace=True)
+                        except TypeError as e:
+                            print(f"Incompatible indexes in input dataframes - runoff or sediment record is not a timeline")
+                            catchThem.append(ss_record.id)
 
                         # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
                         merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
@@ -1012,14 +1032,22 @@ class Miner:
                         # (situation when runoff has started but no sediment concentration data are available yet)
                         merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
                         # calculate the sediment flux [g.min-1]
-                        print(merged_data)
+                        print(f"merged runoff and sediment concentration data:\n{merged_data}\n\n")
                         merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
                         # write the cumulative values at the end of series
-                        soilloss_value = integrate_series_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
-                        print(soilloss_value)
-                        soilloss_per_area = soilloss_value/1000000/plot_area/10000
+                        try:
+                            soilloss_g = integrate_series_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
+                        except ValueError as e:
+                            print(f"Integration by time failed on soil loss calculation - data frame index is not TimeDelta")
+                            soilloss_Mg_ha = "NA"
+                        else:
+                            soilloss_Mg_ha = soilloss_g/1000000/plot_area*10000
+                else:
+                    soilloss_g = "NA"
+                    soilloss_Mg_ha = "NA"
 
-                line.append(soilloss_per_area)
+                line.append(soilloss_g)
+                line.append(soilloss_Mg_ha)
 
                 headers.append("Sediments (texture)")
                 notes.append("")
@@ -1051,6 +1079,9 @@ class Miner:
                 writeRowToCSV(output_csv, line)
 
             output_csv.close()
+            # print record IDs with
+            if len(catchThem) > 0:
+                print("following records don't have correct TimeDelta index:\n"+", ".join([str(c) for c in catchThem]))
         else:
             print("No runs available within given limits.")
 
@@ -1101,7 +1132,7 @@ class Miner:
                 print(f"{i}/{num_runs}")
                 i += 1
 
-                run_title = f"#{run.id} - {run.datetime.strftime('%d.%m.%Y')} - {self.localities[run.locality_id]['name']} - {run.get_crop_name(lang)} [{run.plot_id}], {self.run_types[run.run_type_id]} {{{run.ttr}}}"
+                run_title = f"#{run.id} - {czech_date(run.datetime)} - {self.localities[run.locality_id]['name']} - {run.get_crop_name(lang)} [{run.plot_id}], {self.run_types[run.run_type_id]} {{{run.ttr}}}"
                 print(run_title)
                 # run.show_details()
 
@@ -1130,7 +1161,7 @@ class Miner:
                 ss_record = None
                 sediment_data = None
                 # go through the record type priority list and find the first matching Record
-                for record_type in self.ss_types_tiew_order:
+                for record_type in self.ss_types_view_order:
                     # get the best sediment concentration measurement Record(s)
                     found_records = run.get_records(2, [2, 3], record_type_id = record_type)
                     # print(found_records)
@@ -1162,7 +1193,7 @@ class Miner:
                         # gather all the info and values ========================================
                         line.append(self.localities[run.locality_id]['name'])
                         line.append(run.id)
-                        line.append(run.datetime.strftime('%d. %m. %Y'))
+                        line.append(czech_date(run.datetime))
                         line.append(run.plot_id)
                         line.append(self.simulators[run.simulator_id])
                         crop_name = run.get_crop_name(lang)
@@ -1371,8 +1402,8 @@ def integrate_series_minutes(df, series_name, start_time = None, end_time = None
 
 def integrate_series(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True, time_unit='minutes'):
     """
-    Calculate discrete time integral of selected 'series_name' from dataframe 'df' between start_time and end_time
-    zero_time (if set) or first datapoint is used if start_time is None
+    Calculate discrete time integral of selected 'series_name' from dataframe 'df' between 'start_time' and 'end_time'
+    'zero_time' (if set) or first datapoint is used if start_time is None
     last datapoint is used if end_time is None
     Values between datapoints in source dataframe are linear interpolated if interpolate is True
     Constant value between datapoints is assumed if interpolate is False
@@ -1420,6 +1451,10 @@ def integrate_series(df, series_name, start_time = None, end_time = None, zero_t
         value = get_value_in_time(df, time, series_name, zero_time, extrapolate)
         if prev_time is not None:
             if prev_time >= start_time and time <= end_time:
+                # for the case when two consequent times are equal = error in time data series
+                if time == prev_time:
+                    print(f"\nThere seems to be an error in your data - two consequent times are equal")
+                    continue
                 time_diff = time - prev_time
                 if interpolate:
                     output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
@@ -1490,8 +1525,8 @@ def get_value_in_time(df, timedelta, series_name, zero_time=None, extrapolate=No
         # if the zero time was specified
         if zero_time:
             print(" - extrapolating to zero\n\n")
-            return (df.loc[first_time, series_name] / (first_time - zero_time)) * (timedelta - zero_time)
-        else:  # or return None if extrapolation not intended
+            return (df.loc[first_time, series_name] / (first_time - zero_time).total_seconds()) * (timedelta - zero_time).total_seconds()
+        else:
             print(f"Requested time is before the first record in '{series_name}' data series and extrapolation to zero was not requested.\n")
             return None
 
@@ -1513,10 +1548,8 @@ def get_value_in_time(df, timedelta, series_name, zero_time=None, extrapolate=No
                     t3 = timedelta
 
                     if (t3 - t2) < extrapolate * (t2 - t1):
-                        result = v2 + (t3 - t2) * ((v2 - v1) / (t2 - t1))
-                        # print(f"{v2} + ({t3} - {t2}) * (({v2} - {v1})) / ({t2} - {t1}))")
-                        # print(f"= {result}\n")
-                        return result
+                        return v2 + (t3 - t2).total_seconds() * ((v2 - v1) / (t2 - t1).total_seconds())
+
             else:
                 print(
                     f"Data series '{series_name}' doesn't have enough values for extrapolation.\n")
@@ -1700,6 +1733,8 @@ def writeHTMLheader(fileref):
     fileref.write(towrite)
     return
 
+def czech_date(datetime):
+    return f"{datetime.strftime('%d.').strip('0')} {datetime.strftime('%m.').strip('0')} {datetime.strftime('%Y')}"
 def uka(data, depth = 0, ind = "."):
     """
     Prints out the structure of JSON-like container recursively
