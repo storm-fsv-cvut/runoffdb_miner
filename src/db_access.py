@@ -1,5 +1,5 @@
 import mysql.connector
-
+from mysql.connector import pooling
 
 class DBconnector:
     """
@@ -16,13 +16,23 @@ class DBconnector:
         # password of the user
         self.pwd = "vochechule"
 
-    def connect(self):
+        self.pool = mysql.connector.pooling.MySQLConnectionPool(
+            pool_name="rdb_pool",
+            pool_size=5,  # Set pool size as needed
+            host=self.server,
+            database=self.db_name,
+            user=self.username,
+            password=self.pwd
+        )
+
+    def connect(self, pool_name = "rdb"):
         try:
             db_connection = mysql.connector.connect(
                 host = self.server,
                 user = self.username,
                 password = self.pwd,
-                database = self.db_name
+                database = self.db_name,
+                pool_name = pool_name
             )
         except mysql.connector.errors.InterfaceError as e:
             print("The RunoffDB database server is not accessible:")

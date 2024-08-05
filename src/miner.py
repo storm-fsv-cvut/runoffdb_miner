@@ -21,16 +21,12 @@ lined = "\n"
 # output files cell delimiter
 celld = ";"
 
-# # multipliers for different units to convert to the basic SI units
-# multipliers = {2: 0.001, 3: 1}
-
 
 class Miner:
-    def __init__(self):
-        self.dbc = DBconnector()
+    def __init__(self, date_from = None, date_to = None, simulators = None, localities = None, crops = None):
         # limits for data loads
-        self.date_from = None
-        self.date_to = None
+        self.date_from = date_from
+        self.date_to = date_to
 
         # record type priorities
         self.runoff_types_view_order = [2, 3, 4, 1, 6, 7, 5]
@@ -44,379 +40,385 @@ class Miner:
         # 7 - estimated from similar conditions
         # 8 - rough estimate
 
-        self.runs = None
-        self.simulators = self.load_simulators(lang)
-        self.localities = self.load_localities()
-        self.run_types = self.load_run_types(lang)
-        self.units = self.load_units()
-        self.crop_types = self.load_crop_types(lang)
-        self.plots = self.load_plots()
-        self.samples = self.load_samples()
-        self.crops = self.load_crops()
-        self.agrotechnologies = self.load_agrotechnologies()
-        self.protection_measures = self.load_protection_measures(lang)
-        # print(", ".join([str(p) for p in self.plots.keys()]))
-
-
-    def load_runs(self, limit = None, dateFrom = None, dateTo = None):
-        dbcon = self.dbc.connect()
-        # use global date limits if not specified
-        dateFrom = dateFrom if dateFrom is not None else self.date_from
-        dateTo = dateTo if dateTo is not None else self.date_to
-
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-
-            # start of the query
-            query = f"SELECT {runs_table}.`id` AS run_id, " \
-                    f"{runs_table}.`runoff_start` AS ttr, " \
-                    f"{runs_table}.`init_moisture_id` AS initmoist_recid, " \
-                    f"{runs_table}.`surface_cover_id` AS surface_cover_recid, " \
-                    f"{runs_table}.`rain_intensity_id` AS rainfall_recid, " \
-                    f"{runs_table}.`soil_sample_bulk_id` AS bulkd_ss_id, " \
-                    f"{runs_table}.`soil_sample_texture_id` AS texture_ss_id, "\
-                    f"{runs_table}.`soil_sample_corg_id` AS corg_ss_id, "\
-                    f"{run_groups_table}.`sequence_id` AS sequence_id, " \
-                    f"{run_groups_table}.`datetime` AS datetime, " \
-                    f"{sequences_table}.`simulator_id` AS simulator_id, " \
-                    f"{runs_table}.`run_group_id` AS run_group_id, " \
-                    f"{run_groups_table}.`run_type_id` AS run_type_id, " \
-                    f"{plots_table}.`locality_id` AS locality_id, " \
-                    f"{plots_table}.`id` AS plot_id, " \
-                    f"{plots_table}.`crop_id` AS crop_id, " \
-                    f"{crops_table}.`crop_type_id` AS crop_type_id "\
-                    f"FROM {runs_table} " \
-                    f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
-                    f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
-                    f"JOIN {plots_table} ON {runs_table}.`plot_id` = {plots_table}.`id` " \
-                    f"JOIN {crops_table} ON {plots_table}.`crop_id` = {crops_table}.`id` "\
-                    f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-            if dateFrom is not None:
-                query += f" AND {run_groups_table}.`datetime` > '{dateFrom}'"
-            if dateTo is not None:
-                query += f" AND {run_groups_table}.`datetime` < '{dateTo}'"
-
-            # additional conditions
-            # query += f"AND `` = "
-
-            # end of the query
-            query += " ORDER BY `datetime` ASC"
-
-            if limit:
-                query += f" LIMIT {limit}"
-            # execute the query and fetch the results
-            thecursor.execute(query)
-
-            results = thecursor.fetchall()
-
-            run_dict = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new_run = Run(**r)
-                    new_run.load_measurements()
-                    new_run.plot = self.plots.get(new_run.plot_id)
-                    # new_run.show_details()
-                    run_dict.update({new_run.id: new_run})
-                dbcon.close()
-                self.runs = run_dict
-                return run_dict
-
-            dbcon.close()
-            return None
-        return None
-
-    def load_plots(self, dateFrom = None, dateTo = None):
-        dbcon = self.dbc.connect()
-
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-
-            # start of the query
-            query = f"SELECT * FROM {plots_table} "
-            if dateFrom is not None:
-                query += f" AND `established` > '{dateFrom}'"
-            if dateTo is not None:
-                query += f" AND `established` < '{dateTo}'"
-
-            # end of the query
-            query += " ORDER BY `id` ASC"
-
-            # execute the query and fetch the results
-            thecursor.execute(query)
-
-            results = thecursor.fetchall()
-
-            plot_dict = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new_plot = Plot(r)
-                    plot_dict.update({new_plot.id: new_plot})
-                dbcon.close()
-                return plot_dict
-
-            dbcon.close()
-            return None
-        return None
-
-    def load_samples(self):
-        dbcon = self.dbc.connect()
-
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-
-            query = f"SELECT * FROM {soil_samples_table} ORDER BY `id` ASC"
-
-            thecursor.execute(query)
-
-            results = thecursor.fetchall()
-
-            samples_dict = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new_sample = SoilSample(r)
-                    samples_dict.update({new_sample.id: new_sample})
-                dbcon.close()
-                return samples_dict
-
-            dbcon.close()
-            return None
-        return None
-
-    def load_simulators(self, lang):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor()
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT `id`, `name_{lang}` "
-                              "FROM `simulator`")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                simulators = {}
-                for r in results:
-                    simulators.update({r[0]: r[1]})
-                self.simulators = simulators
-            dbcon.close()
-            return simulators
-        return False
-
-    def load_localities(self):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor()
-            # execute the query and fetch the results
-            thecursor.execute("SELECT `id`, `name`, `lat`, `lng` "
-                              "FROM `locality`")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                localities = {}
-                for r in results:
-                    localities.update({r[0]: {"name": r[1], "lat": r[2], "long": r[3]}})
-            dbcon.close()
-            return localities
-        return False
-
-    def load_run_types(self, lang):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor()
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {run_types_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                run_types_names = {}
-                for r in results:
-                    run_types_names.update({r[0]: r[1]})
-            dbcon.close()
-            return run_types_names
-        return None
-
-    def load_crop_types(self, lang):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor()
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {crop_types_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                crop_types_names = {}
-                for r in results:
-                    crop_types_names.update({r[0]: r[1]})
-            dbcon.close()
-            return crop_types_names
-        return None
-
-    def load_protection_measures(self, lang):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor()
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {protection_measures_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                protection_measures_names = {}
-                for r in results:
-                    protection_measures_names.update({r[0]: r[1]})
-            dbcon.close()
-            return protection_measures_names
-        return None
-
-    def load_units(self):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {units_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                units = {}
-                for r in results:
-                    new_unit = Unit(r)
-                    units.update({new_unit.id: new_unit})
-            dbcon.close()
-            return units
-        return None
-
-
-    def load_crops(self):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {crops_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                crops = {}
-                for r in results:
-                    new_crop = Crop(r)
-                    crops.update({new_crop.id: new_crop})
-            dbcon.close()
-            return crops
-        return None
-
-    def load_agrotechnologies(self):
-        dbcon = self.dbc.connect()
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {agrotechnologies_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                agrotechnologies = {}
-                for r in results:
-                    new_agt = Agrotechnology(**r)
-                    agrotechnologies.update({new_agt.id: new_agt})
-            dbcon.close()
-            return agrotechnologies
-        return None
-
-    def load_record(self, record_id):
-        dbcon = self.dbc.connect()
-
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-
-            # start of the query
-            query = f"SELECT * FROM {records_table} WHERE `id` = {record_id}"
-            # execute the query and fetch the results
-            thecursor.execute(query)
-
-            results = thecursor.fetchone()
-            if thecursor.rowcount > 0:
-                dbcon.close()
-                return Record(**results)
-            else:
-                dbcon.close()
-                return None
-        return None
-
-    def get_simulation_days(self, dateFrom = None, dateTo = None):
-        dbcon = self.dbc.connect()
-        # use instances date limits if not specified
-        dateFrom = dateFrom if dateFrom is not None else self.date_from
-        dateTo = dateTo if dateTo is not None else self.date_from
-
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-
-            # start of the query
-            query = f"SELECT DISTINCT {run_groups_table}.`datetime` AS datetime, " \
-                    f"{run_groups_table}.`sequence_id` AS sequence_id, " \
-                    f"{runs_table}.`id` AS run_id " \
-                    f"FROM {runs_table} " \
-                    f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
-                    f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
-                    f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-            if dateFrom is not None:
-                query += f" AND {run_groups_table}.`datetime` > '{dateFrom}'"
-            if dateTo is not None:
-                query += f" AND {run_groups_table}.`datetime` < '{dateTo}'"
-
-            # additional conditions
-            # query += f"AND `` = "
-
-            # end of the query
-            query += " ORDER BY `datetime` ASC"
-
-            # execute the query and fetch the results
-            thecursor.execute(query)
-
-            results = thecursor.fetchall()
-
-            sim_days = []
-            if thecursor.rowcount > 0:
-                for r in results:
-                    sim_days.append(r['datetime'])
-
-                dbcon.close()
-                return sim_days
-
-            dbcon.close()
-            return None
-        return None
-
-    def load_sequence_ids_by_date(self, datetime):
-        dbcon = self.dbc.connect()
-
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
-
-            # start of the query
-            query = f"SELECT {runs_table}.`id` AS run_id, " \
-                    f"{run_groups_table}.`id` AS group_id, " \
-                    f"{run_groups_table}.`sequence_id` AS sequence_id " \
-                    f"FROM {runs_table} "\
-                    f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
-                    f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
-                    f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) " \
-                    f"AND {run_groups_table}.`datetime` = '{datetime}'"
-
-            # execute the query and fetch the results
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-
-            if thecursor.rowcount > 0:
-                dbcon.close()
-                return results
-
-            dbcon.close()
-            return None
-        return None
+    #
+    # def load_runs(self, limit = None, dateFrom = None, dateTo = None):
+    #     dbcon = self.dbc.connect()
+    #     # use global date limits if not specified
+    #     dateFrom = dateFrom if dateFrom is not None else self.date_from
+    #     dateTo = dateTo if dateTo is not None else self.date_to
+    #
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #
+    #         # start of the query
+    #         query = f"SELECT {runs_table}.`id` AS run_id, " \
+    #                 f"{runs_table}.`runoff_start` AS ttr, " \
+    #                 f"{runs_table}.`init_moisture_id` AS initmoist_recid, " \
+    #                 f"{runs_table}.`surface_cover_id` AS surface_cover_recid, " \
+    #                 f"{runs_table}.`rain_intensity_id` AS rainfall_recid, " \
+    #                 f"{runs_table}.`soil_sample_bulk_id` AS bulkd_ss_id, " \
+    #                 f"{runs_table}.`soil_sample_texture_id` AS texture_ss_id, "\
+    #                 f"{runs_table}.`soil_sample_corg_id` AS corg_ss_id, "\
+    #                 f"{run_groups_table}.`sequence_id` AS sequence_id, " \
+    #                 f"{run_groups_table}.`datetime` AS datetime, " \
+    #                 f"{sequences_table}.`simulator_id` AS simulator_id, " \
+    #                 f"{runs_table}.`run_group_id` AS run_group_id, " \
+    #                 f"{run_groups_table}.`run_type_id` AS run_type_id, " \
+    #                 f"{plots_table}.`locality_id` AS locality_id, " \
+    #                 f"{plots_table}.`id` AS plot_id, " \
+    #                 f"{plots_table}.`crop_id` AS crop_id, " \
+    #                 f"{crops_table}.`crop_type_id` AS crop_type_id "\
+    #                 f"FROM {runs_table} " \
+    #                 f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
+    #                 f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
+    #                 f"JOIN {plots_table} ON {runs_table}.`plot_id` = {plots_table}.`id` " \
+    #                 f"JOIN {crops_table} ON {plots_table}.`crop_id` = {crops_table}.`id` "\
+    #                 f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
+    #         if dateFrom is not None:
+    #             query += f" AND {run_groups_table}.`datetime` > '{dateFrom}'"
+    #         if dateTo is not None:
+    #             query += f" AND {run_groups_table}.`datetime` < '{dateTo}'"
+    #
+    #         # additional conditions
+    #         # query += f"AND `` = "
+    #
+    #         # end of the query
+    #         query += " ORDER BY `datetime` ASC"
+    #
+    #         if limit:
+    #             query += f" LIMIT {limit}"
+    #         # execute the query and fetch the results
+    #         thecursor.execute(query)
+    #
+    #         results = thecursor.fetchall()
+    #
+    #         run_dict = {}
+    #         if thecursor.rowcount > 0:
+    #             for r in results:
+    #                 new_run = Run(**r)
+    #                 new_run.load_measurements()
+    #                 new_run.plot = self.plots.get(new_run.plot_id)
+    #                 # new_run.show_details()
+    #                 run_dict.update({new_run.id: new_run})
+    #             dbcon.close()
+    #             self.runs = run_dict
+    #             return run_dict
+    #
+    #         dbcon.close()
+    #         return None
+    #     return None
+    #
+    # def load_plots(self, dateFrom = None, dateTo = None):
+    #     dbcon = self.dbc.connect()
+    #
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #
+    #         # start of the query
+    #         query = f"SELECT * FROM {plots_table} "
+    #         if dateFrom is not None:
+    #             query += f" AND `established` > '{dateFrom}'"
+    #         if dateTo is not None:
+    #             query += f" AND `established` < '{dateTo}'"
+    #
+    #         # end of the query
+    #         query += " ORDER BY `id` ASC"
+    #
+    #         # execute the query and fetch the results
+    #         thecursor.execute(query)
+    #
+    #         results = thecursor.fetchall()
+    #
+    #         plot_dict = {}
+    #         if thecursor.rowcount > 0:
+    #             for r in results:
+    #                 new_plot = Plot(r)
+    #                 plot_dict.update({new_plot.id: new_plot})
+    #             dbcon.close()
+    #             return plot_dict
+    #
+    #         dbcon.close()
+    #         return None
+    #     return None
+    #
+    # def load_samples(self):
+    #     dbcon = self.dbc.connect()
+    #
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #
+    #         query = f"SELECT * FROM {soil_samples_table} ORDER BY `id` ASC"
+    #
+    #         thecursor.execute(query)
+    #
+    #         results = thecursor.fetchall()
+    #
+    #         samples_dict = {}
+    #         if thecursor.rowcount > 0:
+    #             for r in results:
+    #                 new_sample = SoilSample(r)
+    #                 samples_dict.update({new_sample.id: new_sample})
+    #             dbcon.close()
+    #             return samples_dict
+    #
+    #         dbcon.close()
+    #         return None
+    #     return None
+    #
+    # def load_simulators(self, lang):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor()
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT `id`, `name_{lang}` "
+    #                           "FROM `simulator`")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             simulators = {}
+    #             for r in results:
+    #                 simulators.update({r[0]: r[1]})
+    #             self.simulators = simulators
+    #         dbcon.close()
+    #         return simulators
+    #     return False
+    #
+    # def load_localities(self):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor()
+    #         # execute the query and fetch the results
+    #         thecursor.execute("SELECT `id`, `name`, `lat`, `lng` "
+    #                           "FROM `locality`")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             localities = {}
+    #             for r in results:
+    #                 localities.update({r[0]: {"name": r[1], "lat": r[2], "long": r[3]}})
+    #         dbcon.close()
+    #         return localities
+    #     return False
+    #
+    # def load_run_types(self, lang):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor()
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {run_types_table}")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             run_types_names = {}
+    #             for r in results:
+    #                 run_types_names.update({r[0]: r[1]})
+    #         dbcon.close()
+    #         return run_types_names
+    #     return None
+    #
+    # def load_crop_types(self, lang):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor()
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {crop_types_table}")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             crop_types_names = {}
+    #             for r in results:
+    #                 crop_types_names.update({r[0]: r[1]})
+    #         dbcon.close()
+    #         return crop_types_names
+    #     return None
+    #
+    # def load_protection_measures(self, lang):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor()
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {protection_measures_table}")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             protection_measures_names = {}
+    #             for r in results:
+    #                 protection_measures_names.update({r[0]: r[1]})
+    #         dbcon.close()
+    #         return protection_measures_names
+    #     return None
+    #
+    # def load_units(self):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT * FROM {units_table}")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             units = {}
+    #             for r in results:
+    #                 new_unit = Unit(**r)
+    #                 units.update({new_unit.id: new_unit})
+    #         dbcon.close()
+    #         return units
+    #     return None
+    #
+    # def load_projects(self):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT * FROM {projects_table}")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             projects = {}
+    #             for r in results:
+    #                 new_project = Project(**r)
+    #                 projects.update({new_project.id: new_project})
+    #         dbcon.close()
+    #         return projects
+    #     return None
+    #
+    # def load_crops(self):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT * FROM {crops_table}")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             crops = {}
+    #             for r in results:
+    #                 new_crop = Crop(r)
+    #                 crops.update({new_crop.id: new_crop})
+    #         dbcon.close()
+    #         return crops
+    #     return None
+    #
+    # def load_agrotechnologies(self):
+    #     dbcon = self.dbc.connect()
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #         # execute the query and fetch the results
+    #         thecursor.execute(f"SELECT * FROM {agrotechnologies_table}")
+    #         results = thecursor.fetchall()
+    #         if thecursor.rowcount > 0:
+    #             agrotechnologies = {}
+    #             for r in results:
+    #                 new_agt = Agrotechnology(**r)
+    #                 agrotechnologies.update({new_agt.id: new_agt})
+    #         dbcon.close()
+    #         return agrotechnologies
+    #     return None
+    #
+    # def load_record(self, record_id):
+    #     dbcon = self.dbc.connect()
+    #
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #
+    #         # start of the query
+    #         query = f"SELECT * FROM {records_table} WHERE `id` = {record_id}"
+    #         # execute the query and fetch the results
+    #         thecursor.execute(query)
+    #
+    #         results = thecursor.fetchone()
+    #         if thecursor.rowcount > 0:
+    #             dbcon.close()
+    #             return Record(**results)
+    #         else:
+    #             dbcon.close()
+    #             return None
+    #     return None
+    #
+    # def get_simulation_days(self, dateFrom = None, dateTo = None):
+    #     dbcon = self.dbc.connect()
+    #     # use instances date limits if not specified
+    #     dateFrom = dateFrom if dateFrom is not None else self.date_from
+    #     dateTo = dateTo if dateTo is not None else self.date_from
+    #
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #
+    #         # start of the query
+    #         query = f"SELECT DISTINCT {run_groups_table}.`datetime` AS datetime, " \
+    #                 f"{run_groups_table}.`sequence_id` AS sequence_id, " \
+    #                 f"{runs_table}.`id` AS run_id " \
+    #                 f"FROM {runs_table} " \
+    #                 f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
+    #                 f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
+    #                 f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
+    #         if dateFrom is not None:
+    #             query += f" AND {run_groups_table}.`datetime` > '{dateFrom}'"
+    #         if dateTo is not None:
+    #             query += f" AND {run_groups_table}.`datetime` < '{dateTo}'"
+    #
+    #         # additional conditions
+    #         # query += f"AND `` = "
+    #
+    #         # end of the query
+    #         query += " ORDER BY `datetime` ASC"
+    #
+    #         # execute the query and fetch the results
+    #         thecursor.execute(query)
+    #
+    #         results = thecursor.fetchall()
+    #
+    #         sim_days = []
+    #         if thecursor.rowcount > 0:
+    #             for r in results:
+    #                 sim_days.append(r['datetime'])
+    #
+    #             dbcon.close()
+    #             return sim_days
+    #
+    #         dbcon.close()
+    #         return None
+    #     return None
+    #
+    # def load_sequence_ids_by_date(self, datetime):
+    #     dbcon = self.dbc.connect()
+    #
+    #     if dbcon:
+    #         thecursor = dbcon.cursor(dictionary=True)
+    #
+    #         # start of the query
+    #         query = f"SELECT {runs_table}.`id` AS run_id, " \
+    #                 f"{run_groups_table}.`id` AS group_id, " \
+    #                 f"{run_groups_table}.`sequence_id` AS sequence_id " \
+    #                 f"FROM {runs_table} "\
+    #                 f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
+    #                 f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
+    #                 f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) " \
+    #                 f"AND {run_groups_table}.`datetime` = '{datetime}'"
+    #
+    #         # execute the query and fetch the results
+    #         thecursor.execute(query)
+    #         results = thecursor.fetchall()
+    #
+    #         if thecursor.rowcount > 0:
+    #             dbcon.close()
+    #             return results
+    #
+    #         dbcon.close()
+    #         return None
+    #     return None
 
     def repair_psd(self):
+        """
+        Repairs swapped values of particle size limit and particle mass content for particle size distribution records
+        :return: None
+        """
         dbcon = self.dbc.connect()
 
         if dbcon:
             thecursor = dbcon.cursor(dictionary=True)
 
             # start of the query
-            query = f"SELECT `id` FROM {records_table} WHERE `unit_id` = 19 and `related_value_xunit_id` = 20"
+            query = f"SELECT `id` FROM {RunoffDB.records_table} WHERE `unit_id` = 19 and `related_value_xunit_id` = 20"
             print(query)
 
             thecursor.execute(query)
             results = thecursor.fetchall()
             for r in results:
                 cursor2 = dbcon.cursor(dictionary=True)
-                query = f"\nUPDATE {records_table} SET `related_value_xunit_id` = 19, `unit_id` = 20 WHERE `id`= {r.get('id')};"
+                query = f"\nUPDATE {RunoffDB.records_table} SET `related_value_xunit_id` = 19, `unit_id` = 20 WHERE `id`= {r.get('id')};"
                 print(query)
                 cursor2.execute(query)
                 # dbcon.commit()
@@ -521,54 +523,75 @@ class Miner:
         return
 
     def generate_euro_table(self, output_path):
+        # create runoffDB connection instance
+        rdb = RunoffDB(output_na_value="NA")
+        rdb.show_localities()
+        # load runs matching input conditions
+        runs = rdb.load_runs(date_from=self.date_from, date_to=self.date_to)
 
-        # the runs may not be loaded yet ...
-        if self.runs is None:
-            self.load_runs()
-
-        # self.show_agrotechnologies()
-
-        if self.runs:
-
+        if runs:
             lines = []
             catchThem = []
-            for run in self.runs.values():
+            for run in runs.values():
                 # run.show_details()
-                print(f"\n\nrun ID {run.id} ({czech_date(run.datetime)}, {self.localities.get(run.locality_id)['name']})")
+                print(f"\n\nrun ID {run.id} ({czech_date(run.datetime)}, {rdb.localities.get(run.locality_id).name})")
                 headers = ["ID"]
                 notes = [""]
                 poznamky = [""]
                 line = [run.id]
 
-                headers.append("run title")
-                notes.append("")
-                poznamky.append("tohle je tu jenom teď pro nás, abysme se orientovali a snadno mohli odhality chyby")
-                line.append(f"{czech_date(run.datetime)} - {self.localities.get(run.locality_id)['name']}")
+                # headers.append("run title")
+                # notes.append("")
+                # poznamky.append("tohle je tu jenom teď pro nás, abysme se orientovali a snadno mohli odhality chyby")
+                # line.append(f"{czech_date(run.datetime)} - {self.localities.get(run.locality_id)['name']}")
 
                 headers.append("Contributor name")
                 notes.append("")
                 poznamky.append("Co myslíš, že by mělo bejt tady? Jména odpovědnejch lidí? institucí? nebo všude my jakožto contributor do týhle iniciativy?")
-                line.append("CTU Prague")
+                if run.get_project_ids() is not None:
+                    contributors = []
+                    for prid in run.get_project_ids():
+                        contributors.append(Project.project_leaders.get(prid))
+                    if run.locality_id == 8:
+                        contributors.append("Beitlerová H.")
+                    line.append(f"CTU in Prague ({', '.join([name for name in contributors])})")
+
+                elif run.locality_id == 2:
+                    line.append(f"CTU in Prague (Kavka P.)")
+                elif run.locality_id == 5:
+                    line.append(f"CTU in Prague (Kavka P., Krása J.)")
+                else:
+                    line.append(f"CTU in Prague")
+
 
                 headers.append("Published?")
                 notes.append("")
                 poznamky.append("Tady nevim, jestli jako byly publikovaný ty samotný data ... nebo jde i o publikace z těch dat vycházející?")
-                line.append("n")
 
                 headers.append("DOI")
                 notes.append("")
                 poznamky.append("")
-                line.append("NA")
+
+                if run.locality_id == 10:
+                    line.append("y")
+                    line.append("https://doi.org/10.3390/app11104427")
+                elif run.locality_id == 2:
+                    line.append("y")
+                    line.append("https://doi.org/10.3390/w14030327")
+                else:
+                    line.append("n")
+                    line.append("NA")
+
 
                 headers.append("Coordinates  lat (deg)")
                 notes.append("")
                 poznamky.append("")
-                line.append(self.localities.get(run.plot.locality_id)["lat"])
+                line.append(rdb.localities.get(run.plot.locality_id).lat)
 
                 headers.append("Coordinates  long (deg)")
                 notes.append("")
                 poznamky.append("")
-                line.append(self.localities.get(run.plot.locality_id)["long"])
+                line.append(rdb.localities.get(run.plot.locality_id).lng)
 
                 headers.append("Soil Type (WRB)")
                 notes.append("")
@@ -585,19 +608,19 @@ class Miner:
                     # print(f"run {run.id} has texture sample {run.texture_ss_id}")
                     # print(f"sample {run.texture_ss_id} has texture record set {self.samples.get(run.texture_ss_id).texture_record_id}")
                     # load the record from DB
-                    if self.samples.get(run.texture_ss_id).texture_record_id is not None:
-                        tex_rec = self.load_record(self.samples.get(run.texture_ss_id).texture_record_id)
+                    if rdb.samples.get(run.texture_ss_id).texture_record_id is not None:
+                        tex_rec = rdb.load_record(rdb.samples.get(run.texture_ss_id).texture_record_id)
                         # print(f"unit of the record is '{self.units.get(tex_rec.unit_id).name_en}' with dimension [{self.units.get(tex_rec.unit_id).unit}]")
                         # print(f"related X unit of the record is '{self.units.get(tex_rec.related_value_x_unit_id).name_en}' with dimension [{self.units.get(tex_rec.related_value_x_unit_id).unit}]")
                         tex_rec.load_data("cumulative_mass_content", "particle_size", index_column="particle_size", order_by="particle_size")
                         # print(tex_rec.data)
                         # upper size limits for clay/silt/sand
-                        fraction_limits = [0.002, 0.063, 2]
-                        interpolated = interpolate_texture(tex_rec.data, fraction_limits, return_int=False, return_cumulative=False)
+                        WRB_fraction_limits = [0.002, 0.063, 2]
+                        interpolated = interpolate_texture(tex_rec.data, WRB_fraction_limits, "cumulative_mass_content", return_int=False, return_cumulative=False)
                         # print("\n"+interpolated.to_string())
-                        line.append(interpolated.loc[fraction_limits[0], 'cumulative_mass_content'])
-                        line.append(interpolated.loc[fraction_limits[1], 'cumulative_mass_content'])
-                        line.append(interpolated.loc[fraction_limits[2], 'cumulative_mass_content'])
+                        line.append(interpolated.loc[WRB_fraction_limits[0], 'cumulative_mass_content'])
+                        line.append(interpolated.loc[WRB_fraction_limits[1], 'cumulative_mass_content'])
+                        line.append(interpolated.loc[WRB_fraction_limits[2], 'cumulative_mass_content'])
                     else:
                         print("Soil sample assigned as texture sample doesn't have texture record assigned!")
                         line.extend(["NA", "NA", "NA"])
@@ -610,16 +633,16 @@ class Miner:
                 line.append("NA")
 
                 headers.append("Soil texture system")
-                notes.append("Particle size distribution is generally not stored in a particular classification system and can be interpolated to any particle size class limit sequence.")
-                poznamky.append("Zrnitost je stejně přeinterpolovávaná z různejch analýz ... jsem schopnej dát v jakymkolliv systému, tak jenom mi poraďte, jakej je nejlepší")
-                line.append("upper size limits for clay/silt/sand = 0.002/0.063/2")
+                notes.append("")
+                poznamky.append("")
+                line.append("WRB")
 
                 headers.append("SOC (g/kg)")
                 notes.append("")
-                poznamky.append("Tohle je náš Corg,že jo?")
+                poznamky.append("")
                 if run.corg_ss_id is not None:
-                    if self.samples.get(run.corg_ss_id).corg_id is not None:
-                        corg_rec = self.load_record(self.samples.get(run.corg_ss_id).corg_id)
+                    if rdb.samples.get(run.corg_ss_id).corg_id is not None:
+                        corg_rec = rdb.load_record(rdb.samples.get(run.corg_ss_id).corg_id)
                         corg_data = corg_rec.load_data("C_org")
                         # for a (undesired!) case when the assigned bulk density record consists of multiple values
                         line.append(corg_data["C_org"].mean())
@@ -639,10 +662,10 @@ class Miner:
                 poznamky.append("")
                 notes.append("")
                 if run.bulkd_ss_id is not None:
-                    if self.samples.get(run.bulkd_ss_id).bulk_density_id is not None:
-                        bd_rec = self.load_record(self.samples.get(run.bulkd_ss_id).bulk_density_id)
+                    if rdb.samples.get(run.bulkd_ss_id).bulk_density_id is not None:
+                        bd_rec = rdb.load_record(rdb.samples.get(run.bulkd_ss_id).bulk_density_id)
                         bd_rec.load_data("bulk_density")
-                        bd_data = bd_rec.get_data_in_unit(18, "bulk_density")
+                        bd_data = bd_rec.get_data_in_unit(27, "bulk_density")
                         # for a (undesired!) case when the assigned bulk density record consists of multiple values
                         line.append(bd_data["bulk_density"].mean())
                     else:
@@ -679,7 +702,7 @@ class Miner:
                 if run.crop_id is None:
                     line.append("NA")
                 else:
-                    line.append(self.crops.get(run.crop_id).name[lang])
+                    line.append(rdb.crops.get(run.crop_id).name[lang])
 
                 headers.append("Remarks (land cover)")
                 notes.append("")
@@ -719,7 +742,7 @@ class Miner:
                     line.append("")
                     line.append("")
                 else:
-                    agrt = self.agrotechnologies.get(run.plot.agrotechnology_id)
+                    agrt = rdb.agrotechnologies.get(run.plot.agrotechnology_id)
                     # grassland was cut for hay - other cases
                     if run.crop_id in [22, 23]:
                         if agrt.is_hay_cut():
@@ -753,7 +776,7 @@ class Miner:
                 notes.append("")
                 poznamky.append("")
                 if run.plot.protection_measure_id is not None:
-                    line.append(self.protection_measures.get(run.plot.protection_measure_id))
+                    line.append(rdb.protection_measures.get(run.plot.protection_measure_id).name[lang])
                 else:
                     line.append("")
 
@@ -768,7 +791,7 @@ class Miner:
                 plot_established = run.plot.established
                 plot_last_used = run.plot.get_last_run_datetime()
                 plot_lasted = (plot_last_used.date() - plot_established).days
-                line.append(1 if plot_lasted == 0 else plot_lasted)
+                line.append(f"{1 if plot_lasted == 0 else plot_lasted} {'day' if plot_lasted == 0 else 'days'}")
 
 
                 headers.append("time-step (days/months/years)")
@@ -779,7 +802,7 @@ class Miner:
                 headers.append("beginning monitoring")
                 notes.append("For a particular experimental plot? Or for the whole locality?")
                 poznamky.append("teď je tady uvedenej den založení plochy")
-                line.append(plot_established)
+                line.append(plot_established.strftime('%d.%m.%Y'))
 
                 headers.append("end monitoring")
                 notes.append("For a particular experimental plot? Or for the whole locality?")
@@ -789,12 +812,12 @@ class Miner:
                 headers.append("plot number/name")
                 notes.append("")
                 poznamky.append("")
-                line.append(f"{run.plot.id}/{run.plot.name}")
+                line.append(f"{run.plot.id}/{run.plot.name if run.plot.name not in ('', None) else '-'}")
 
                 headers.append("Setup/Method")
                 notes.append("How detailed should this description be?")
                 poznamky.append("")
-                line.append(f"artificial rainfall simulator experiment with '{self.simulators.get(run.simulator_id)}' simulator setup.")
+                line.append(f"artificial rainfall simulator experiment with '{rdb.simulators.get(run.simulator_id).name[lang]}' simulator setup.")
 
                 headers.append("Bounded/Open")
                 notes.append("")
@@ -831,15 +854,12 @@ class Miner:
                 notes.append("")
                 poznamky.append("")
                 # for cultivated fallow presume 0 surface cover
-                if self.crops.get(run.plot.crop_id).crop_type_id == 10:
+                if rdb.crops.get(run.plot.crop_id).crop_type_id == 10:
                     line.append(100)
                 else:
                     if run.surface_cover_recid is not None:
-                        surcov_rec = self.load_record(run.surface_cover_recid)
-                        surcov_data = surcov_rec.load_data("surface_cover")
-                        # for a (undesired!) case when the assigned bulk density record consists of multiple values
-                        line.append(100-surcov_data["surface_cover"].mean())
-                        print(surcov_rec.data)
+                        surcov_value = run.get_surface_cover_value()
+                        line.append(100-surcov_value)
                     else:
                         line.append("NA")
 
@@ -852,7 +872,7 @@ class Miner:
                     for msrmnt in measurements:
                         for rcrd in msrmnt.records:
                             if rcrd.unit_id == 7:
-                                veg_cover_rec = self.load_record(rcrd.id)
+                                veg_cover_rec = rdb.load_record(rcrd.id)
                                 veg_cover_data = veg_cover_rec.load_data("vegetation_cover")
                                 # for a (undesired!) case when the assigned bulk density record consists of multiple values
                                 veg_cover = veg_cover_data["vegetation_cover"].mean()
@@ -866,7 +886,7 @@ class Miner:
                     for msrmnt in measurements:
                         for rcrd in msrmnt.records:
                             if rcrd.unit_id == 9:
-                                stone_cover_rec = self.load_record(rcrd.id)
+                                stone_cover_rec = rdb.load_record(rcrd.id)
                                 stone_cover_data = stone_cover_rec.load_data("stone_cover")
                                 # for a (undesired!) case when the assigned bulk density record consists of multiple values
                                 stone_cover = stone_cover_data["stone_cover"].mean()
@@ -876,7 +896,7 @@ class Miner:
                 notes.append("")
                 poznamky.append("")
                 if run.rain_intensity_recid is not None:
-                    intensity_rec = self.load_record(run.rain_intensity_recid)
+                    intensity_rec = rdb.load_record(run.rain_intensity_recid)
                     intensity_rec.load_data("rain_intensity")
                     intensity_data = intensity_rec.get_data("rain_intensity")
                     # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
@@ -884,6 +904,8 @@ class Miner:
                     line.append(str(round(intensity_data["rain_intensity"].max(), 1))+x)
 
                 else:
+                    # ignore the whole simulation run if rainfall is not available
+                    # continue
                     line.append("NA")
 
                 headers.append("Rainfall (mm)")
@@ -892,9 +914,10 @@ class Miner:
                 rainfall_rectype = ""
                 rainfall_mm = None
                 if run.rain_intensity_recid is not None:
-                    intensity_rec = self.load_record(run.rain_intensity_recid)
+                    intensity_rec = rdb.load_record(run.rain_intensity_recid)
                     intensity_data = intensity_rec.load_data("rain_intensity")
                     rainfall_mm = round(integrate_series(intensity_data, "rain_intensity", interpolate=False, time_unit='hours'), 0)
+
                     line.append(rainfall_mm)
                     if intensity_rec.record_type_id in [7, 8]:
                         rainfall_rectype = "Estimated"
@@ -953,125 +976,140 @@ class Miner:
                                 except ValueError as e:
                                     catchThem.append(runoff_record.id)
                                     print(f"Integration by time failed on total runoff calculation - data frame index is not TimeDelta")
+                                    runoff_data = None
                             break
 
                 line.append(runoff_mm)
 
-                headers.append("Runoff coefficient")
-                notes.append("")
-                poznamky.append("")
-                if rainfall_mm not in (None, "NA") and runoff_mm not in (None, "NA"):
-                    line.append(runoff_mm/rainfall_mm)
-                else:
-                    line.append("NA ")
-
-                headers.append("Soil Erosion (g)")
-                notes.append("")
-                poznamky.append("")
-
-                headers.append("Soil Erosion (Mg/ha)")
-                notes.append("")
-                poznamky.append("")
-
-                # search for sediment concentration records
-                sediment_data = None
-                # go through the record type priority list and find the first matching Record
-                for record_type in self.ss_types_view_order:
-                    # get the best sediment concentration measurement Record(s)
-                    found_records = run.get_records(2, [2, 3], record_type_id = record_type)
-                    if found_records is not None:
-                        if len(found_records) > 1:
-                            print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
-                                  f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
-                        ss_record = found_records[0]
-                        # get the sediment concentration data in [g.l-1]
-                        sediment_data = ss_record.get_data_in_unit(3, sed_conc_label)
-                        # if sediment data exist break the search cycle
-                        if sediment_data is not None:
-                            # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
-                            break
-
-                # initiate with NA values that will be used if no valid data is found
-                soilloss_g = "NA"
-                soilloss_Mg_ha = "NA"
-                # if both runoff and sediment concentration data are found
-                if runoff_data is not None and sediment_data is not None:
-                    # if both dataframes have some data
-                    if not runoff_data.empty and not sediment_data.empty:
-                        # a common zero time is added (if possible) to force the integration from very start
-                        # and to allow for cross-interpolation if the sediment series starts later than the runoff series
-                        t0 = get_zero_timestamp(runoff_data, runoff_label)
-                        if t0:
-                            runoff_data.loc[pd.Timedelta(t0)] = 0
-                            runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
-                            runoff_data.sort_index()
-                            # if the zero time from runoff series is before the first value of sediment series (should be)
-                            if t0 < sediment_data.index[0]:
-                                # New row to add
-                                sediment_data.loc[pd.Timedelta(t0)] = 0
-                                sediment_data = pd.concat([sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
-                                sediment_data.sort_index()
-                        else:  # assign the runoff start time as t0
-                            t0 = run.ttr
-                        print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
-                        print(f"sediment data (record #{ss_record.id}):\n{sediment_data}\n")
-
-                        # merge the two dataframes into one with common 'time' index
-                        merged_data = pd.concat([runoff_data, sediment_data], axis=1, join='outer')
-                        # re-order the rows by time
-                        try:
-                            merged_data.sort_index(inplace=True)
-                        except TypeError as e:
-                            print(f"Incompatible indexes in input dataframes - runoff or sediment record is not a timeline")
-                            catchThem.append(ss_record.id)
-
-                        # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
-                        merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
-                        merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
-                        # replace possible NaN at the very beginning of time series with 0
-                        # (situation when runoff has started but no sediment concentration data are available yet)
-                        merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
-                        # calculate the sediment flux [g.min-1]
-                        print(f"merged runoff and sediment concentration data:\n{merged_data}\n\n")
-                        merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
-                        # write the cumulative values at the end of series
-                        try:
-                            soilloss_g = integrate_series_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
-                        except ValueError as e:
-                            print(f"Integration by time failed on soil loss calculation - data frame index is not TimeDelta")
-                            soilloss_Mg_ha = "NA"
-                        else:
-                            soilloss_Mg_ha = soilloss_g/1000000/plot_area*10000
-                else:
-                    soilloss_g = "NA"
-                    soilloss_Mg_ha = "NA"
-
-                line.append(soilloss_g)
-                line.append(soilloss_Mg_ha)
-
-                headers.append("Sediments (texture)")
-                notes.append("")
-                poznamky.append("")
-                line.append("NA")
-
-                headers.append("Sediments (%OM/%SOC)")
-                notes.append("")
-                poznamky.append("")
-                line.append("NA")
-
-                headers.append("Sediments (Nutrients g/kg)")
-                notes.append("")
-                poznamky.append("")
-                line.append("NA")
-
-                headers.append("Extra info")
-                line.append("")
-
+                # headers.append("Runoff coefficient")
+                # notes.append("")
+                # poznamky.append("")
+                # if rainfall_mm not in (None, "NA") and runoff_mm not in (None, "NA"):
+                #     line.append(runoff_mm/rainfall_mm)
+                # else:
+                #     line.append("NA ")
+                # #
+                # # headers.append("Soil Erosion (g)")
+                # # notes.append("")
+                # # poznamky.append("")
+                #
+                # headers.append("Soil Erosion (Mg/ha)")
+                # notes.append("")
+                # poznamky.append("")
+                #
+                # # search for sediment concentration records
+                # sediment_data = None
+                # # go through the record type priority list and find the first matching Record
+                # for record_type in self.ss_types_view_order:
+                #     # get the best sediment concentration measurement Record(s)
+                #     found_records = run.get_records(2, [2, 3], record_type_id = record_type)
+                #     if found_records is not None:
+                #         if len(found_records) > 1:
+                #             print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
+                #                   f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
+                #         ss_record = found_records[0]
+                #         # get the sediment concentration data in [g.l-1]
+                #         sediment_data = ss_record.get_data_in_unit(3, sed_conc_label)
+                #         # if sediment data exist break the search cycle
+                #         if sediment_data is not None:
+                #             try:
+                #                 get_zero_timestamp(sediment_data, sed_conc_label)
+                #             except ValueError as e:
+                #                 catchThem.append(ss_record.id)
+                #                 print(
+                #                     f"Integration by time failed on total sedtest calculation - data frame index is not TimeDelta")
+                #                 sediment_data = None
+                #             # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
+                #             break
+                #
+                # # initiate with NA values that will be used if no valid data is found
+                # soilloss_g = "NA"
+                # soilloss_Mg_ha = "NA"
+                # # if both runoff and sediment concentration data are found
+                # if runoff_data is not None and sediment_data is not None:
+                #     # if both dataframes have some data
+                #     if not runoff_data.empty and not sediment_data.empty:
+                #         # a common zero time is added (if possible) to force the integration from very start
+                #         # and to allow for cross-interpolation if the sediment series starts later than the runoff series
+                #         t0 = get_zero_timestamp(runoff_data, runoff_label)
+                #         if t0:
+                #             runoff_data.loc[pd.Timedelta(t0)] = 0
+                #             runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
+                #             runoff_data.sort_index()
+                #             # if the zero time from runoff series is before the first value of sediment series (should be)
+                #             if t0 < sediment_data.index[0]:
+                #                 # New row to add
+                #                 sediment_data.loc[pd.Timedelta(t0)] = 0
+                #                 sediment_data = pd.concat([sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
+                #                 sediment_data.sort_index()
+                #         else:  # assign the runoff start time as t0
+                #             t0 = run.ttr
+                #         print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
+                #         print(f"sediment data (record #{ss_record.id}):\n{sediment_data}\n")
+                #
+                #         # merge the two dataframes into one with common 'time' index
+                #         merged_data = pd.concat([runoff_data, sediment_data], axis=1, join='outer')
+                #         # re-order the rows by time
+                #         try:
+                #             merged_data.sort_index(inplace=True)
+                #         except TypeError as e:
+                #             print(f"Incompatible indexes in input dataframes - runoff or sediment record is not a timeline")
+                #             catchThem.append(ss_record.id)
+                #
+                #         # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
+                #         merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
+                #         merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
+                #         # replace possible NaN at the very beginning of time series with 0
+                #         # (situation when runoff has started but no sediment concentration data are available yet)
+                #         merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
+                #         # calculate the sediment flux [g.min-1]
+                #         print(f"merged runoff and sediment concentration data:\n{merged_data}\n\n")
+                #         merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
+                #         # write the cumulative values at the end of series
+                #         try:
+                #             soilloss_g = integrate_series_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
+                #         except ValueError as e:
+                #             print(f"Integration by time failed on soil loss calculation - data frame index is not TimeDelta")
+                #             soilloss_Mg_ha = "NA"
+                #         else:
+                #             soilloss_Mg_ha = soilloss_g/1000000/plot_area*10000
+                # else:
+                #     soilloss_g = "NA"
+                #     soilloss_Mg_ha = "NA"
+                #     # ignore the whole simulation run if runoff or sediment is not available
+                #     continue
+                #
+                # # line.append(soilloss_g)
+                # line.append(soilloss_Mg_ha)
+                #
+                # headers.append("Sediments (texture)")
+                # notes.append("")
+                # poznamky.append("")
+                # line.append("NA")
+                #
+                # headers.append("Sediments (%OM/%SOC)")
+                # notes.append("")
+                # poznamky.append("")
+                # line.append("NA")
+                #
+                # headers.append("Sediments (Nutrients g/kg)")
+                # notes.append("")
+                # poznamky.append("")
+                # line.append("NA")
+                #
+                # headers.append("Extra info")
+                # if run.locality_id == 10:
+                #     line.append("performed on disturbed soil sample container")
+                # else:
+                #     line.append("")
+                #
                 lines.append(line)
 
+            print(headers)
+            print(lines)
             # write everything to output table
             output_csv = open(output_path, "w")
-            writeRowToCSV(output_csv, poznamky)
+            # writeRowToCSV(output_csv, poznamky)
             writeRowToCSV(output_csv, notes)
             writeRowToCSV(output_csv, headers)
 
@@ -1088,12 +1126,6 @@ class Miner:
         return
 
 
-    def show_agrotechnologies(self):
-        for id, agt in self.agrotechnologies.items():
-            print(f"\n#{agt.id} - {agt.name_en}")
-            for date, operation in agt.operation_sequence.items():
-                print(f"\t{date}: {operation.name_en}")
-
     def generate_cumulative_values_csv(self, output_path, logfile_path = None, plots_dir = None):
         """
 
@@ -1102,10 +1134,12 @@ class Miner:
         :param plots_dir: directory path for plots
         :return:
         """
-        if self.runs is None:
-            self.load_runs()
+        # create runoffDB connection instance
+        rdb = RunoffDB()
+        # load runs matching input conditions
+        runs = rdb.load_runs(date_from=self.date_from, date_to=self.date_to)
 
-        if self.runs:
+        if runs:
             velocities_filename = "velocities.csv"
 
             cumulatives_headers1 = {"cz": ["lokalita", "simID", "datum", "plot ID", "simulator", "plodina", "typ_plodiny", "poc_stav",
@@ -1126,13 +1160,13 @@ class Miner:
 
             # just for the counter
             i = 1
-            num_runs = len(self.runs)
-            for run in self.runs.values():
+            num_runs = len(runs)
+            for run in runs.values():
                 # show the counter
                 print(f"{i}/{num_runs}")
                 i += 1
 
-                run_title = f"#{run.id} - {czech_date(run.datetime)} - {self.localities[run.locality_id]['name']} - {run.get_crop_name(lang)} [{run.plot_id}], {self.run_types[run.run_type_id]} {{{run.ttr}}}"
+                run_title = f"#{run.id} - {czech_date(run.datetime)} - {rdb.localities[run.locality_id]['name']} - {run.get_crop_name(lang)} [{run.plot_id}], {rdb.run_types[run.run_type_id]} {{{run.ttr}}}"
                 print(run_title)
                 # run.show_details()
 
@@ -1191,21 +1225,21 @@ class Miner:
                             if not os.path.isdir(plots_dir):
                                 os.mkdir(plots_dir)
                         # gather all the info and values ========================================
-                        line.append(self.localities[run.locality_id]['name'])
+                        line.append(rdb.localities[run.locality_id]['name'])
                         line.append(run.id)
                         line.append(czech_date(run.datetime))
                         line.append(run.plot_id)
-                        line.append(self.simulators[run.simulator_id])
+                        line.append(rdb.simulators[run.simulator_id])
                         crop_name = run.get_crop_name(lang)
                         if crop_name:
                             line.append(crop_name)
                         else:
                             line.append("NA")
                         if run.crop_type_id:
-                            line.append(self.crop_types[run.crop_type_id])
+                            line.append(rdb.crop_types[run.crop_type_id])
                         else:
                             line.append("NA")
-                        line.append(self.run_types[run.run_type_id])
+                        line.append(rdb.run_types[run.run_type_id])
                         if run.initmoist_recid:
                             line.append(run.get_initial_moisture_value())
                         else:
@@ -1225,9 +1259,9 @@ class Miner:
                         line.append(run.ttr)
 
 
-                        runoff_label = f"runoff [{self.units.get(runoff_record.unit_id)}]"
-                        sed_conc_label = f"sed. conc. [{self.units.get(3)}]"
-                        sed_flux_label = f"sed. flux [{self.units.get(25)}]"
+                        runoff_label = f"runoff [{rdb.units.get(runoff_record.unit_id).unit}]"
+                        sed_conc_label = f"sed. conc. [{rdb.units.get(3).unit}]"
+                        sed_flux_label = f"sed. flux [{rdb.units.get(25).unit}]"
                         tot_runoff_label = "total runoff"
                         sed_mass_label = "sediment mass"
 
@@ -1303,18 +1337,17 @@ class Miner:
 
         return
 
-def interpolate_texture(original_texture, new_limits, return_cumulative = True, return_int = True, smallest_content = 1):
+def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative = True, return_int = True, smallest_content = 1):
     # ensure original_texture is a pandas DataFrame
     if not isinstance(original_texture, pd.DataFrame):
         raise TypeError("original_texture parameter value must be a pandas DataFrame")
 
     # get column names from the input DataFrame
     particle_size_col = original_texture.index.name
-    cumulative_mass_col = original_texture.columns[0]
 
     # extract original limits and cumulative contents from the DataFrame
     original_limits = original_texture.index.to_list()
-    original_contents = original_texture.iloc[:, 0].to_list()
+    original_contents = original_texture[cum_mass_col_name].to_list()
 
     # insert artificial first datapoint with the smallest content to allow for interpolation of smaller particles content
     original_limits.insert(0, 0)
@@ -1357,7 +1390,7 @@ def interpolate_texture(original_texture, new_limits, return_cumulative = True, 
 
     output_df = pd.DataFrame({
         particle_size_col: new_limits,
-        cumulative_mass_col: output_contents
+        cum_mass_col_name: output_contents
     })
 
     # set particle_size as the index
@@ -1404,7 +1437,7 @@ def integrate_series(df, series_name, start_time = None, end_time = None, zero_t
     """
     Calculate discrete time integral of selected 'series_name' from dataframe 'df' between 'start_time' and 'end_time'
     'zero_time' (if set) or first datapoint is used if start_time is None
-    last datapoint is used if end_time is None
+    Last datapoint is used if end_time is None
     Values between datapoints in source dataframe are linear interpolated if interpolate is True
     Constant value between datapoints is assumed if interpolate is False
     When end_time is after last datapoint in series and extrapolate is True then the en value is linear extrapolated from last interval's times and values
@@ -1421,7 +1454,8 @@ def integrate_series(df, series_name, start_time = None, end_time = None, zero_t
 
     :returns: discrete time integral values.
     """
-
+    if series_name == "rain_intensiity":
+        print("integrating rain_intensiity")
     # ensure dataframe is time-indexed
     if not isinstance(df.index, pd.TimedeltaIndex):
         raise ValueError("DataFrame index must be of type TimedeltaIndex.")
