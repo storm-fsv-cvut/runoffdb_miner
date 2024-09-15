@@ -1,4 +1,6 @@
 import pandas as pd
+from datetime import datetime, time
+import json
 import mysql.connector
 import numpy as np
 from pint import UnitRegistry
@@ -43,6 +45,7 @@ class RunoffDB:
     projects_table = "`project`"
     projectlinks_table = "`sequence_project`"
     protection_measures_table = "`protection_measure`"
+    quality_index_table = "quality_index"
     records_table = "`record`"
     record_types_table = "`record_type`"
     record_record_table = "`record_record`"
@@ -73,17 +76,23 @@ class RunoffDB:
         self.na_value = output_na_value
 
         # on initiation load all the entities that are used all the time
+        self.run_types = self.load_run_types()
+        self.crop_types = self.load_crop_types()
+        self.operation_intensities = self.load_operation_intensities()
+        self.operation_types = self.load_operation_types()
+        self.organizations = self.load_organizations()
         self.simulators = self.load_simulators()
         self.localities = self.load_localities()
-        self.run_types = self.load_run_types()
+        self.agrotechnologies = self.load_agrotechnologies()
         self.units = self.load_units()
-        self.crop_types = self.load_crop_types()
         self.plots = self.load_plots()
         self.samples = self.load_samples()
         self.crops = self.load_crops()
-        self.agrotechnologies = self.load_agrotechnologies()
         self.protection_measures = self.load_protection_measures()
         self.projects = self.load_projects()
+        self.phenomena = self.load_phenomena()
+        self.record_types = self.load_record_types()
+        self.quality_index = self.load_quality_index()
 
         # do not load the runs as they might be limited by filters
         self.runs = None
@@ -118,9 +127,9 @@ class RunoffDB:
                     f"JOIN {self.crops_table} ON {self.plots_table}.`crop_id` = {self.crops_table}.`id` " \
                     f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
             if date_from is not None:
-                query += f" AND {self.run_groups_table}.`datetime` > '{date_from}'"
+                query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
             if date_to is not None:
-                query += f" AND {self.run_groups_table}.`datetime` < '{date_to}'"
+                query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
 
             # additional conditions
             # query += f"AND `` = "
@@ -130,6 +139,7 @@ class RunoffDB:
 
             if limit:
                 query += f" LIMIT {limit}"
+            # print(query)
             # execute the query and fetch the results
             thecursor.execute(query)
 
@@ -210,6 +220,24 @@ class RunoffDB:
             thecursor.close()
         return simulators
 
+    def load_organizations(self, id = None):
+        with self.dbcon.cursor(dictionary=True) as thecursor:
+            query = f"SELECT * FROM {self.organizations_table}"
+            if id is not None:
+                query += f" WHERE `id` = {id}"
+            query += " ORDER BY `id` ASC"
+
+            thecursor.execute(query)
+            results = thecursor.fetchall()
+            if thecursor.rowcount > 0:
+                organizations = {}
+                for r in results:
+                    new = Organization(self, **r)
+                    organizations.update({new.id: new})
+                print(f"{len(organizations)} organizations successfully loaded")
+            thecursor.close()
+        return organizations
+
     def load_localities(self, id = None):
         with self.dbcon.cursor(dictionary=True) as thecursor:
             query = f"SELECT * FROM {self.localities_table}"
@@ -229,7 +257,7 @@ class RunoffDB:
 
     def load_run_types(self):
         with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.record_types_table}"
+            query = f"SELECT * FROM {self.run_types_table}"
 
             thecursor.execute(query)
             results = thecursor.fetchall()
@@ -258,6 +286,38 @@ class RunoffDB:
             print(f"crop types successfully loaded")
             thecursor.close()
         return crop_types
+
+    def load_operation_types(self):
+        with self.dbcon.cursor(dictionary=True) as thecursor:
+            query = f"SELECT * FROM {self.operation_types_table}"
+
+            thecursor.execute(query)
+            results = thecursor.fetchall()
+
+            if thecursor.rowcount > 0:
+                op_types = {}
+                for r in results:
+                    new = OperationType(**r)
+                    op_types.update({new.id: new})
+                print(f"operation types successfully loaded")
+            thecursor.close()
+        return op_types
+
+    def load_operation_intensities(self):
+        with self.dbcon.cursor(dictionary=True) as thecursor:
+            query = f"SELECT * FROM {self.operation_intensities_table}"
+
+            thecursor.execute(query)
+            results = thecursor.fetchall()
+
+            if thecursor.rowcount > 0:
+                op_ints = {}
+                for r in results:
+                    new = OperationIntensity(**r)
+                    op_ints.update({new.id: new})
+                print(f"operation types successfully loaded")
+            thecursor.close()
+        return op_ints
 
     def load_protection_measures(self):
         with self.dbcon.cursor(dictionary=True) as thecursor:
@@ -310,7 +370,7 @@ class RunoffDB:
             if thecursor.rowcount > 0:
                 crops = {}
                 for r in results:
-                    new_crop = Crop(**r)
+                    new_crop = Crop(self, **r)
                     crops.update({new_crop.id: new_crop})
             print(f"{len(crops)} crops successfully loaded")
             thecursor.close()
@@ -344,27 +404,89 @@ class RunoffDB:
 
         return None
 
-    def get_simulation_days(self, dateFrom = None, dateTo = None):
-        # use instances date limits if not specified
-        dateFrom = dateFrom if dateFrom is not None else self.date_from
-        dateTo = dateTo if dateTo is not None else self.date_from
+    def load_phenomena(self):
+        with self.dbcon.cursor(dictionary=True) as thecursor:
+            query = f"SELECT * FROM {self.phenomena_table}"
+
+            thecursor.execute(query)
+            results = thecursor.fetchall()
+
+            if thecursor.rowcount > 0:
+                phenomena = {}
+                for r in results:
+                    new = Phenomenon(**r)
+                    phenomena.update({new.id: new})
+                print(f"phenomena successfully loaded")
+            thecursor.close()
+        return phenomena
+
+    def load_record_types(self):
+            with self.dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.record_types_table}"
+
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+
+                if thecursor.rowcount > 0:
+                    record_types = {}
+                    for r in results:
+                        new = RecordType(**r)
+                        record_types.update({new.id: new})
+                    print(f"record types successfully loaded")
+                thecursor.close()
+            return record_types
+
+    def load_quality_index(self):
+            with self.dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.quality_index_table}"
+
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+
+                if thecursor.rowcount > 0:
+                    record_types = {}
+                    for r in results:
+                        new = RecordType(**r)
+                        record_types.update({new.id: new})
+                    print(f"quality indexes successfully loaded")
+                thecursor.close()
+            return record_types
+
+    def load_record_by_id(self, record_id):
+        with self.dbcon.cursor(dictionary=True)as thecursor:
+            # start of the query
+            query = f"SELECT * FROM {self.records_table} WHERE `id` = {record_id}"
+            # execute the query and fetch the results
+            thecursor.execute(query)
+            results = thecursor.fetchone()
+            thecursor.close()
+
+            if len(results) > 0:
+                return Record(self, **results)
+            else:
+                return None
+
+    def get_simulation_days(self, date_from=None, date_to=None):
+        """
+        Returns list of datetime objects when a simulation was carried on.
+        Time component of the datetime is set to 0:00:00.
+        :param date_from: filter simulation days older than date_from
+        :param date_to: filter simulation days younger than date_to
+        :return:
+        """
+
 
         with self.dbcon.cursor(dictionary=True) as thecursor:
             # start of the query
-            query = f"SELECT DISTINCT {self.run_groups_table}.`datetime` AS datetime, " \
-                    f"{self.run_groups_table}.`sequence_id` AS sequence_id, " \
-                    f"{self.runs_table}.`id` AS run_id " \
+            query = f"SELECT DISTINCT DATE({self.run_groups_table}.`datetime`) AS datetime " \
                     f"FROM {self.runs_table} " \
                     f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
                     f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
                     f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-            if dateFrom is not None:
-                query += f" AND {self.run_groups_table}.`datetime` > '{dateFrom}'"
-            if dateTo is not None:
-                query += f" AND {self.run_groups_table}.`datetime` < '{dateTo}'"
-
-            # additional conditions
-            # query += f"AND `` = "
+            if date_from is not None:
+                query += f" AND {self.run_groups_table}.`datetime` > '{date_from}'"
+            if date_to is not None:
+                query += f" AND {self.run_groups_table}.`datetime` < '{date_to}'"
 
             # end of the query
             query += " ORDER BY `datetime` ASC"
@@ -377,8 +499,11 @@ class RunoffDB:
             sim_days = []
             if len(results) > 0:
                 for r in results:
-                    sim_days.append(r['datetime'])
-
+                    # create start of the day (00:00:00)
+                    the_day = r['datetime']
+                    the_day = datetime.combine(the_day, time(0, 0, 0))
+                    # the_day.replace(hour=0, minute=0, second=0)
+                    sim_days.append(the_day)
                 return sim_days
             return None
 
@@ -415,6 +540,16 @@ class RunoffDB:
                 return results
             return None
 
+    def get_all_phenomena_ids(self):
+        return [k for k in self.phenomena.keys()]
+
+    def get_all_units_ids(self):
+        return [k for k in self.units.keys()]
+
+    def get_all_quality_indexes(self):
+        return [k for k in self.quality_index.keys()]
+
+
 class Run:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -424,14 +559,18 @@ class Run:
         self.run_group_id = kwargs["run_group_id"]
         self.datetime = kwargs["datetime"]
         self.simulator_id = kwargs["simulator_id"]
+        self.simulator = runoffdb.simulators[self.simulator_id]
         self.run_type_id = kwargs["run_type_id"]
+        self.run_type = self.runoffdb.run_types[self.run_type_id]
         self.ttr = kwargs["ttr"]
         self.measurements = None
         self.brothers = None
         self.plot_id = kwargs["plot_id"]
-        self.plot = None
+        self.plot = runoffdb.plots[self.plot_id]
         self.locality_id = kwargs["locality_id"]
+        self.locality = self.runoffdb.localities[self.locality_id]
         self.crop_id = kwargs["crop_id"]
+        self.crop = runoffdb.crops[self.crop_id]
         self.crop_type_id = kwargs["crop_type_id"]
         self.crop_name = None
         self.initmoist_recid = kwargs["initmoist_recid"]
@@ -468,13 +607,13 @@ class Run:
                 for meas in self.measurements:
                     meas.show_details(indent)
 
-        print("\n"+ indent + f"soil texture sample: {self.texture_ss_id}")
-        print(indent + f"soil bulk density sample: {self.bulkd_ss_id}")
-        print(indent + f"soil Corg sample: {self.corg_ss_id}")
+        print(f"\n{indent}soil texture sample: {self.texture_ss_id}")
+        print(f"{indent}soil bulk density sample: {self.bulkd_ss_id}")
+        print(f"{indent}soil Corg sample: {self.corg_ss_id}")
 
-        print("\n" + indent + f"rain intensity record: {self.rain_intensity_recid}")
-        print(indent + f"initial moisture record: {self.initmoist_recid}")
-        print(indent + f"surface cover record: {self.surface_cover_recid}")
+        print(f"\n{indent}rain intensity record: {self.rain_intensity_recid}")
+        print(f"{indent}initial moisture record: {self.initmoist_recid}")
+        print(f"{indent}surface cover record: {self.surface_cover_recid}")
         print("\n")
 
     def load_group_brothers(self):
@@ -494,46 +633,34 @@ class Run:
                 return brothers
             return None
 
-    # def load_measurements(self, phenomenon_id = None):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor()
-    #         # compose the query
-    #         query = "SELECT `measurement`.`id`, `phenomenon`.`name_cz` FROM `measurement` "\
-    #             "JOIN `phenomenon` ON `phenomenon`.`id` = `measurement`.`phenomenon_id`"\
-    #             "JOIN `measurement_run` ON `measurement_run`.`measurement_id` = `measurement`.`id`"\
-    #             f" WHERE `run_id` = {self.id}"
-    #         if phenomenon_id:
-    #             query += f" AND `phenomenon_id` = {phenomenon_id}"
-    #         # execute the query and fetch the results
-    #         thecursor.execute(query)
-    #         results = thecursor.fetchall()
-    #
-    #         measurements = {}
-    #         if thecursor.rowcount > 0:
-    #             for m in results:
-    #                 measurements.update({m[0]:m[1]})
-    #             dbcon.close()
-    #             return measurements
-    #         dbcon.close()
-    #     return None
-
-
-    def get_initial_moisture_value(self):
+    def get_initial_moisture_value(self, multi_value=False):
         if self.initmoist_recid:
-            initmoist_rec = self.get_records(self.initmoist_recid)
+            initmoist_rec = self.runoffdb.load_record_by_id(self.initmoist_recid)
             initmoist_rec.load_data("initial_moisture")
             initmoist_data = initmoist_rec.get_data("initial_moisture")
 
-            if len(initmoist_data.index) > 1:
-                print(f"Initial moisture record {initmoist_rec.id} of run {self.id} has more then one data points, mean value is returned.")
-            return initmoist_data.mean()
-
+            if len(initmoist_data.index) == 1:
+                return initmoist_data["initial_moisture"].mean()
+            else:
+                if multi_value:
+                    return initmoist_data["initial_moisture"].toList()
+                else:
+                    print(f"Surface cover record {initmoist_rec.id} of run {self.id} has more then one value!")
+                    print(f"Mean value of all {len(initmoist_data.index)} data points was returned.")
+                    return initmoist_data["initial_moisture"].mean()
         else:
-            print(f"run {self.id} doesn't have initial moisture record ID assigned.")
+            print(f"\trun #{self.id} doesn't have initial moisture record ID assigned.")
             return None
 
+
     def get_surface_cover_value(self, multi_value=False):
+        """
+        Returns a value of surface cover assigned to the run.
+        If the assigned record holds more data points either mean is returned or a list of values.
+
+        :param multi_value: if False returns mean of all values if more than one data point belongs to the record or list of values if True
+        :return: value of surface cover or list of all values in record
+        """
         if self.surface_cover_recid:
             surface_cover_rec = self.runoffdb.load_record(self.surface_cover_recid)
             surface_cover_rec.load_data("surface_cover")
@@ -549,14 +676,13 @@ class Run:
                     print(f"Mean value of all {len(surface_cover_data.index)} data points was returned.")
                     return surface_cover_data["surface_cover"].mean()
         else:
-            print(f"Run {self.id} doesn't have surface cover record ID assigned.")
+            print(f"\trun #{self.id} doesn't have surface cover record ID assigned.")
             return self.runoffdb.na_value
 
     def get_rainfall_intensity_timeline(self):
         if self.rain_intensity_recid:
             intensity_rec = self.load_record(self.rain_intensity_recid)
-            intensity_rec.load_data("rain_intensity")
-            intensity_data = intensity_rec.get_data("rain_intensity")
+            intensity_data = intensity_rec.load_data("rain_intensity")
             # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
             if len(intensity_data.index) == 1:
                 print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
@@ -579,6 +705,91 @@ class Run:
         else:
             print(f"run {self.id} doesn't have rainfall intensity record ID assigned.")
             return None
+
+    def get_rainfall_intensity_value(self):
+        if self.rain_intensity_recid:
+            intensity_rec = self.runoffdb.load_record_by_id(self.rain_intensity_recid)
+            intensity_data = intensity_rec.load_data("rain_intensity")
+            # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
+            if len(intensity_data.index) == 1:
+                print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
+                return None
+            elif len(intensity_data.index) == 2:
+                if intensity_data["rain_intensity"].iloc[-1] != 0:
+                    print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} doesn't end with zero value!")
+                    return None
+                return intensity_data["rain_intensity"].iloc[0]
+            else:
+                # interrupted or variable intensity rainfall
+                numzeros = 0
+                for datapoint in intensity_data:
+                    if datapoint[0] == 0:
+                        numzeros += 1
+                if numzeros > 1:
+                    return "interrupted"
+                else:
+                    return "variable"
+        else:
+            print(f"\trun {self.id} doesn't have rainfall intensity record ID assigned.")
+            return None
+
+    def get_best_runoff_record(self, view_order=None):
+        # use the default view order if not specified
+        view_order = view_order if view_order is not None else self.runoffdb.default_view_order
+        # search for surface runoff rate record
+        # go through the record type priority list and find the first matching Record
+        for record_type in view_order:
+            # ignore "missing record" type
+            if record_type != 99:
+                # get the best surface runoff measurement Record
+                found_records = self.get_records(1, 1, record_type)
+                if found_records is not None:
+                    for qi in self.runoffdb.get_all_quality_indexes()+[None]:
+                        # list records of this quality
+                        rq = []
+                        for rec in found_records:
+                            if rec.quality_index_id == qi:
+                                print(f"\trunoff rate record of unit {rec.unit_id}, type {record_type} and quality index {qi} found: {rec.id}")
+                                rq.append(rec)
+                        # as soon as any record is found return it
+                        if len(rq) > 0:
+                            if len(rq) > 1:
+                                print(f"\tMultiple runoff records of type {record_type} and quality index {qi} were found for run #{self.id}:\n"
+                                      f"{', '.join([str(r.id) for r in rq])}"
+                                      f"\tFirst of them will be used for processing (record id {rq[0].id}).")
+                            return rq[0]
+
+        print(f"\trun #{self.id} has no runoff measurement records.")
+        return None
+
+    def get_best_sediment_concentration_record(self, view_order=None):
+        # use the default view order if not specified
+        view_order = view_order if view_order is not None else self.runoffdb.default_view_order
+        # search for sediment concentration record
+        # go through the record type priority list and find the first matching Record
+        for record_type in view_order:
+            # ignore "missing record" type
+            if record_type != 99:
+                # get the best sediment concentration measurement Record
+                found_records = self.get_records(2, [2, 3], record_type_id=record_type)
+                if found_records is not None:
+                    for qi in self.runoffdb.get_all_quality_indexes()+[None]:
+                        # records of this quality
+                        rq = []
+                        for rec in found_records:
+                            if rec.quality_index_id == qi:
+                                print(f"\tsediment concentration record of unit {rec.unit_id}, type {record_type} and quality index {qi} found: {rec.id}")
+                                rq.append(rec)
+                        # as soon as any record is found return it
+                        if len(rq) > 0:
+                            if len(rq) > 1:
+                                print(f"\tMultiple sediment concentration records of type {record_type} and quality index {qi} were found for run #{self.id}:\n"
+                                      f"{', '.join([str(r.id) for r in rq])}"
+                                      f"\tFirst of them will be used for processing (record id {rq[0].id}).")
+                            return rq[0]
+
+        print(f"\trun #{self.id} has no sediment concentration measurement records.")
+        return None
 
     def get_total_rainfall(self):
         raise NotImplementedError("Run object method 'get_total_rainfall()' is not implemented yet")
@@ -622,6 +833,7 @@ class Run:
             query = f"SELECT * FROM {RunoffDB.measurements_table} " \
                     f"JOIN {RunoffDB.measurement_run_table} ON {RunoffDB.measurement_run_table}.`measurement_id` = {RunoffDB.measurements_table}.`id` " \
                     f"WHERE {RunoffDB.measurement_run_table}.`run_id` = {self.id}"
+            # print(query)
             thecursor.execute(query)
             results = thecursor.fetchall()
             thecursor.close()
@@ -652,7 +864,7 @@ class Run:
                 return out
         else:
             # the measurements are not loaded yet, try loading them
-            self.load_measurements()
+            self.measurements = self.load_measurements()
             if self.measurements:
                 return self.get_measurements(phenomenon_id)
             else:
@@ -674,6 +886,7 @@ class Run:
                     ids.append(r[0])
         return ids
 
+
     def get_terminal_velocity_value(self, time=None, record_type=None):
         found_records = self.get_records(5, [15], record_type_id=record_type)
         if found_records:
@@ -694,12 +907,48 @@ class Run:
             return None
         return
 
+    def save_metadata(self, path, lang="en"):
+        meta = {}
+        meta.update({"run ID": self.id})
+        meta.update({"sequence ID": self.sequence_id})
+        meta.update({"run group ID": self.run_group_id})
+        meta.update({"simulator": self.simulator.get_metadata()})
+        meta.update({"run type": self.runoffdb.run_types[self.run_type_id].name[lang]})
+        meta.update({"date": self.datetime.strftime('%Y-%m-%d')})
+        meta.update({"start time": self.datetime.strftime('%H:%M:%S')})
+        meta.update({"locality": self.runoffdb.localities[self.locality_id].name})
+        meta.update({"time to runoff": str(self.ttr)})
+        meta.update({"crop": self.crop.get_metadata(lang)})
+        meta.update({"plot": self.plot.get_metadata(lang)})
+        if self.plot.agrotechnology is not None:
+            meta.update({"agrotechnology": self.plot.agrotechnology.get_metadata(lang)})
+        else:
+            meta.update({"agrotechnology": "NA"})
+
+        if len(self.get_measurements_metadata(lang)) > 0:
+            meta.update({"measurements": self.get_measurements_metadata(lang)})
+        else:
+            meta.update({"measurements": "no measurements found"})
+
+        with open(path, "w") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=4)
+        return
+
+    def get_measurements_metadata(self, lang="en"):
+        meta = []
+        msrmnts = self.get_measurements()
+        if msrmnts is not None:
+            for ms in msrmnts:
+                meta.append(ms.get_metadata(lang))
+        return meta
+
 class Measurement:
-    def __init__(self, dbcon, **kwargs):
-        self.dbcon = dbcon
+    def __init__(self, runoffdb, **kwargs):
+        self.runoffdb = runoffdb
 
         self.id = kwargs.get("id")
         self.phenomenon_id = kwargs.get("phenomenon_id")
+        self.phenomenon = runoffdb.phenomena[self.phenomenon_id]
         self.plot_id = kwargs.get("plot_id")
         self.locality_id = kwargs.get("locality_id")
         self.date = kwargs.get("date")
@@ -739,30 +988,26 @@ class Measurement:
 
 
     def load_records(self):
-        with self.dbc.connect() as dbcon:
-            if dbcon:
-                thecursor = dbcon.cursor(dictionary=True)
+        with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
+            query = f"SELECT * FROM {RunoffDB.records_table} WHERE `measurement_id` = {self.id}"
+            # print(query)
+            thecursor.execute(query)
+            results = thecursor.fetchall()
+            thecursor.close()
 
-                query = f"SELECT * FROM {RunoffDB.records_table} WHERE `measurement_id` = {self.id}"
-                # print(query)
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-
-                if thecursor.rowcount == 0:
-                    # print(f"\tNo record found for measurement {self.id}")
-                    return []
-                else:
-                    rcrds = []
-                    for r in results:
-                        new = Record(**r)
-                        rcrds.append(new)
-                    self.records = rcrds
-                    return rcrds
+            if len(results) == 0:
+                # print(f"\tNo record found for measurement {self.id}")
+                return []
             else:
-                return None
+                rcrds = []
+                for r in results:
+                    new = Record(self.runoffdb, **r)
+                    rcrds.append(new)
+                self.records = rcrds
+                return rcrds
 
-    def get_records(self, unit_id = None, record_type_id = None):
-        if self.records:
+    def get_records(self, unit_id=None, record_type_id=None):
+        if self.records is not None:
             out = []
             for rec in self.records:
                 if not unit_id:
@@ -792,11 +1037,32 @@ class Measurement:
                 return out
         else:
             # the records were not loaded yet, try loading them
-            self.load_records()
+            self.records = self.load_records()
             if self.records:
-                self.get_records(unit_id, record_type_id)
+                return self.get_records(unit_id, record_type_id)
             else:
                 return None
+
+    def get_metadata(self, lang="en"):
+        meta = {"measurement ID": self.id,
+                "phenomenon": self.phenomenon.name[lang]}
+        meta.update({"date": self.date.strftime('%Y-%m-%d')}) if self.date is not None else None
+        meta.update({"description": self.description[lang]}) if self.description[lang] is not None else None
+        meta.update({"note": self.note[lang]}) if self.note[lang] is not None else None
+
+
+
+        if self.get_records() is not None:
+            rmeta = []
+            for rec in self.get_records():
+                rmeta.append(rec.get_metadata())
+            if len(rmeta) > 0:
+                meta.update({"records": rmeta})
+            else:
+                meta.update({"records": "no records found"})
+        else:
+            meta.update({"records": "no records found"})
+        return meta
 
 class Record:
 
@@ -807,20 +1073,23 @@ class Record:
         self.measurement_id = kwargs.get("measurement_id")
         self.record_type_id = kwargs.get("record_type_id")
         self.unit_id = kwargs.get("unit_id")
+        self.unit = self.runoffdb.units[self.unit_id]
         self.note_cz = kwargs.get("note_cz")
         self.note_en = kwargs.get("note_en")
         self.related_value_x_unit_id = kwargs.get("related_value_xunit_id")
+        self.unit_rel_x = self.runoffdb.units[self.related_value_x_unit_id] if self.related_value_x_unit_id is not None else None
         self.related_value_y_unit_id = kwargs.get("related_value_yunit_id")
+        self.unit_rel_y = self.runoffdb.units[self.related_value_y_unit_id] if self.related_value_y_unit_id is not None else None
         self.related_value_z_unit_id = kwargs.get("related_value_zunit_id")
+        self.unit_rel_z = self.runoffdb.units[self.related_value_z_unit_id] if self.related_value_z_unit_id is not None else None
         self.quality_index_id = kwargs.get("quality_index_id")
+        self.quality_index = self.runoffdb.quality_index[self.quality_index_id ] if self.quality_index_id is not None else None
         self.is_timeline = kwargs.get("is_timeline")
         self.description_cz = kwargs.get("description_cz")
         self.description_en = kwargs.get("description_en")
 
         self.description = {"cz": self.description_cz, "en": self.description_en}
         self.note = {"cz": self.note_cz, "en": self.note_en}
-
-        self.unit = self.load_unit()
 
         self.data = None
 
@@ -848,30 +1117,29 @@ class Record:
 
         return
 
-    def load_data(self, value_name, related_x = None, related_y = None, related_z = None, index_column = None, order_by=None):
+    def load_data(self, value_name, related_x=None, related_y=None, related_z=None, index_column=None, order_by=None):
         more = ""
 
-        if related_x is not None:
-            if not self.related_value_x_unit_id:
-                print(f"Related value X is not defined for record id {self.id}")
+        if self.related_value_x_unit_id is not None:
+            more += ", `related_value_x`"
+            if related_x is not None:
+                more += f" AS {related_x} "
             else:
-                more += ", `related_value_x`"
-                if related_x != True:
-                    more += f" AS {related_x} "
-        if related_y is not None:
-            if not self.related_value_y_unit_id:
-                print(f"Related value Y is not defined for record id {self.id}")
+                more += f" AS rel_value_x"
+
+        if self.related_value_y_unit_id is not None:
+            more += ", `related_value_y`"
+            if related_y is not None:
+                more += f" AS {related_y} "
             else:
-                more += ", `related_value_y`"
-                if related_y != True:
-                    more += f" AS {related_y} "
-        if related_z is not None:
-            if not self.related_value_z_unit_id:
-                print(f"Related value Z is not defined for record id {self.id}")
+                more += f" AS rel_value_y"
+
+        if self.related_value_z_unit_id is not None:
+            more += ", `related_value_z`"
+            if related_z is not None:
+                more += f" AS {related_z} "
             else:
-                more += ", `related_value_z`"
-                if related_z != True:
-                    more += f" AS {related_z} "
+                more += f" AS rel_value_z"
 
         if order_by is not None:
             order_by = f" ORDER BY `{order_by}` ASC"
@@ -880,7 +1148,8 @@ class Record:
         else:
             order_by = ""
 
-        query = f"SELECT `time`, `value` AS {value_name} {more} FROM {RunoffDB.data_table} WHERE `record_id` = {self.id}{order_by}"
+        select_time = "`time`, " if self.is_timeline else ""
+        query = f"SELECT {select_time}`value` AS {value_name} {more} FROM {RunoffDB.data_table} WHERE `record_id` = {self.id}{order_by}"
         result_dataFrame = pd.read_sql(query, self.runoffdb.dbcon)
 
         if self.is_timeline and index_column is None:
@@ -947,6 +1216,40 @@ class Record:
         else:
             return None
 
+    def get_source_records(self):
+        with self.runoffdb.dbcon.cursor() as thecursor:
+            # start of the query
+            query = f"SELECT `record_target` FROM {self.runoffdb.record_record_table} WHERE `record_source` = {self.id}"
+            # execute the query and fetch the results
+            thecursor.execute(query)
+            results = thecursor.fetchall()
+            thecursor.close()
+
+            parents = []
+            if len(results) > 0:
+                for r in results:
+                    parents.append(r[0])
+                return parents
+            return None
+
+    def get_metadata(self, lang="en"):
+        meta = {"record ID": self.id,
+                "value name": self.unit.name[lang],
+                "value unit": self.unit.unit
+                }
+        meta.update({"related value x name": self.unit_rel_x.name[lang],
+                     "related value x unit": self.unit_rel_x.unit}) if self.related_value_x_unit_id is not None else None
+        meta.update({"related value y name": self.unit_rel_y.name[lang],
+             "related value y unit": self.unit_rel_y.unit}) if self.related_value_y_unit_id is not None else None
+        meta.update({"related value z name": self.unit_rel_z.name[lang],
+             "related value z unit": self.unit_rel_z.unit}) if self.related_value_z_unit_id is not None else None
+        meta.update({"quality index": self.runoffdb.quality_index[self.quality_index_id].name[lang]}) if self.quality_index_id is not None else None
+
+        meta.update({"record type": self.runoffdb.record_types[self.record_type_id].name[lang]})
+        meta.update({"source records": [r for r in self.get_source_records()]}) if self.get_source_records() is not None else None
+
+        return meta
+
     # def get_value_in_time(self, timedelta, zero_time=False, extrapolate=False, timekey = 'time', valuekey = 'value'):
     #     """
     #     Returns interpolated value of dataseries in time specified as timedelta
@@ -958,26 +1261,26 @@ class Record:
     #     """
     #     return get_value_in_time(self.get_data(), timedelta, zero_time, extrapolate, timekey, valuekey)
 
-    def load_unit(self):
-        if self.unit_id:
-            with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
-                query = f"SELECT * FROM {RunoffDB.units_table} WHERE `id` = {self.unit_id}"
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close
-
-                if len(results) == 1:
-                    unit = Unit(**results[0])
-                    return unit
-                elif len(results) == 0:
-                    print(f"No unit with ID {self.unit_id} found.")
-                    return None
-                else:
-                    print(f"More then one unit found for ID {self.unit_id} ... this really shouldn't happen.")
-                    return None
-        else:
-            print(f"Record {self.id} doesn't have unit ID assigned.")
-            return None
+    # def load_unit(self):
+    #     if self.unit_id:
+    #         with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
+    #             query = f"SELECT * FROM {RunoffDB.units_table} WHERE `id` = {self.unit_id}"
+    #             thecursor.execute(query)
+    #             results = thecursor.fetchall()
+    #             thecursor.close
+    #
+    #             if len(results) == 1:
+    #                 unit = Unit(**results[0])
+    #                 return unit
+    #             elif len(results) == 0:
+    #                 print(f"No unit with ID {self.unit_id} found.")
+    #                 return None
+    #             else:
+    #                 print(f"More then one unit found for ID {self.unit_id} ... this really shouldn't happen.")
+    #                 return None
+    #     else:
+    #         print(f"Record {self.id} doesn't have unit ID assigned.")
+    #         return None
 
 
 
@@ -1063,6 +1366,7 @@ class Plot:
         self.name = kwargs.get("name")
         self.crop_id = kwargs.get("crop_id")
         self.agrotechnology_id = kwargs.get("agrotechnology_id")
+        self.agrotechnology = runoffdb.agrotechnologies[self.agrotechnology_id] if self.agrotechnology_id is not None else None
         self.established = kwargs.get("established")
         self.plot_width = kwargs.get("plot_width")
         self.plot_length = kwargs.get("plot_length")
@@ -1099,11 +1403,27 @@ class Plot:
                 return run_list
         return []
 
+    def get_metadata(self, lang="en"):
+        meta = {"plot ID": self.id,
+                "name": self.name,
+                "established": self.established.strftime('%Y-%m-%d'),
+                "plot length": self.plot_length,
+                "plot length unit": "m",
+                "plot width": self.plot_width,
+                "plot width unit": "m",
+                "slope steepness": self.plot_slope,
+                "slope steepness unit": "%"}
+        if self.soil_origin_locality_id is not None and self.soil_origin_locality_id != self.locality_id:
+            meta.update({"soil origin locality": self.runoffdb.localities[self.soil_origin_locality_id].name})
+        return meta
 
 class Crop:
-    def __init__(self, **kwargs):
+    def __init__(self, runoffdb, **kwargs):
+        self.runoffdb = runoffdb
+
         self.id = kwargs.get("id")
         self.crop_type_id = kwargs.get("crop_type_id")
+        self.crop_type = self.runoffdb.crop_types[self.crop_type_id] if self.crop_type_id is not None else None
         self.crop_er_type_id = kwargs.get("croper_type_id")
         self.name_cz = kwargs.get("name_cz")
         self.name_en = kwargs.get("name_en")
@@ -1114,6 +1434,16 @@ class Crop:
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def get_metadata(self, lang="en"):
+        meta = {"crop ID": self.id,
+                "name": self.name[lang]
+                }
+        meta.update({"description": self.description[lang]}) if self.description[lang] is not None else None
+        meta.update({"crop type": self.crop_type.name[lang]}) if self.crop_type is not None else None
+        meta.update({"variety": self.variety}) if self.variety is not None else None
+        meta.update({"is catch crop": "True" if self.is_catch_crop == 1 else "False"}) if self.is_catch_crop is not None else None
+        return meta
 
 class Agrotechnology:
 
@@ -1130,7 +1460,7 @@ class Agrotechnology:
             if len(results) > 0:
                 operations = {}
                 for r in results:
-                    new = Operation(**r)
+                    new = Operation(runoffdb, **r)
                     operations.update({new.id: new})
             Agrotechnology.operations = operations
             print(f"{len(operations)} agrotechnical operations successfully loaded")
@@ -1161,7 +1491,7 @@ class Agrotechnology:
         self.operation_sequence = self.load_operation_sequence()
 
     def load_operation_sequence(self):
-        dbcon = DBconnector().connect()
+        dbcon = DBconnector().pool.get_connection()
         if dbcon:
             thecursor = dbcon.cursor(dictionary=True)
 
@@ -1188,6 +1518,11 @@ class Agrotechnology:
             return None
         return max([op.operation_intensity_id for op in self.operation_sequence.values()])
 
+    def get_maximum_disturbance_depth(self):
+        if self.operation_sequence is None or self.operation_sequence == {}:
+            return None
+        return max([op.operation_depth_m for op in self.operation_sequence.values()])
+
 
     def is_hay_cut(self):
         for op in self.operation_sequence.values():
@@ -1201,8 +1536,25 @@ class Agrotechnology:
                 return True
         return False
 
+    def get_metadata(self, lang="en"):
+        meta = {"name": self.name[lang]}
+        if self.description[lang] is not None:
+            meta.update({"description": self.description[lang]})
+        if self.note[lang] is not None:
+            meta.update({"note": self.note[lang]})
+        if self.operation_sequence is not None:
+            if len(self.operation_sequence) > 0:
+                sequence = {}
+                for date, operation in self.operation_sequence.items():
+                    sequence.update({date.strftime('%Y-%m-%d'): operation.get_metadata(lang)})
+                meta.update({"operation sequence": sequence})
+                meta.update({"maximum disturbance depth": self.get_maximum_disturbance_depth()})
+                meta.update({"maximum disturbance intensity": self.runoffdb.operation_intensities[self.get_maximum_disturbance_level()].description[lang]})
+        return meta
 class Operation:
-    def __init__(self, **kwargs):
+    def __init__(self, runoffdb, **kwargs):
+        self.runoffdb = runoffdb
+
         self.id = kwargs.get("id")
         self.operation_intensity_id = kwargs.get("operation_intensity_id")
         self.operation_depth_m = kwargs.get("operation_depth_m")
@@ -1217,6 +1569,18 @@ class Operation:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
         self.machinery_type = {"cz": self.machinery_type_cz, "en": self.machinery_type_en}
+
+    def get_metadata(self, lang="en"):
+        meta = {"name": self.name[lang]}
+        if self.description[lang] is not None:
+            meta.update({"description": self.description[lang]})
+        if self.machinery_type[lang] is not None:
+            meta.update({"machinery type": self.machinery_type[lang]})
+        meta.update({"operation type": self.runoffdb.operation_types[self.operation_type_id].description[lang],
+                "operation depth": self.operation_depth_m,
+                "operation depth unit": "m",
+                "operation intensity": self.runoffdb.operation_intensities[self.operation_intensity_id].description[lang]})
+        return meta
 
 class Unit:
     def __init__(self, **kwargs):
@@ -1267,6 +1631,49 @@ class Simulator:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+        self.organization = self.runoffdb.organizations[self.organization_id]
+    def get_metadata(self, lang="en"):
+        meta = {"name": self.name[lang]}
+        if self.description is not None :
+            meta.update({"description": self.description[lang],
+                         "organization": self.organization.get_metadata()})
+        return meta
+
+class Organization:
+    def __init__(self, runoffdb, **kwargs):
+        self.runoffdb = runoffdb
+
+        self.id = kwargs["id"]
+        self.name = kwargs["name"]
+        self.contact_person = kwargs["contact_person"]
+        self.contact_number = kwargs.get("contact_number")
+        self.contact_email = kwargs.get("contact_email")
+        self.name_code = kwargs.get("name_code")
+
+    def get_metadata(self, lang="en"):
+        meta = {"name": self.name}
+        if self.contact_person is not None:
+            if self.contact_person != "":
+                meta.update({"contact person": self.contact_person})
+                # add the contact info if contact person is in DB
+                if self.contact_email is not None:
+                    if self.contact_email != "":
+                        meta.update({"contact email": self.contact_email})
+                    else:
+                        meta.update({"contact email": "NA"})
+
+                if self.contact_number is not None:
+                    if self.contact_number != "":
+                        meta.update({"contact number": self.contact_number})
+                    else:
+                        meta.update({"contact number": "NA"})
+            else:
+                meta.update({"contact person": "NA"})
+        else:
+            meta.update({"contact person": "NA"})
+
+        return meta
+
 class ProtectionMeasure:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -1277,6 +1684,7 @@ class ProtectionMeasure:
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
 class RunType:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -1289,6 +1697,57 @@ class RunType:
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
 class CropType:
+    def __init__(self, **kwargs):
+        self.id = kwargs["id"]
+        self.name_cz = kwargs["name_cz"]
+        self.name_en = kwargs["name_en"]
+        self.description_cz = kwargs.get("description_cz")
+        self.description_en = kwargs.get("description_en")
+
+        self.name = {"cz": self.name_cz, "en": self.name_en}
+        self.description = {"cz": self.description_cz, "en": self.description_en}
+
+class OperationType:
+    def __init__(self, **kwargs):
+        self.id = kwargs["id"]
+        self.description_cz = kwargs.get("description_cz")
+        self.description_en = kwargs.get("description_en")
+
+        self.description = {"cz": self.description_cz, "en": self.description_en}
+
+class OperationIntensity:
+    def __init__(self, **kwargs):
+        self.id = kwargs["id"]
+        self.description_cz = kwargs.get("description_cz")
+        self.description_en = kwargs.get("description_en")
+
+        self.description = {"cz": self.description_cz, "en": self.description_en}
+
+class Phenomenon:
+    def __init__(self, **kwargs):
+        self.id = kwargs["id"]
+        self.name_cz = kwargs["name_cz"]
+        self.name_en = kwargs["name_en"]
+        self.description_cz = kwargs.get("description_cz")
+        self.description_en = kwargs.get("description_en")
+        self.model_parameter_set_id = kwargs.get("model_parameter_set_id")
+
+        self.name = {"cz": self.name_cz, "en": self.name_en}
+        self.description = {"cz": self.description_cz, "en": self.description_en}
+
+class RecordType:
+    def __init__(self, **kwargs):
+        self.id = kwargs["id"]
+        self.name_cz = kwargs["name_cz"]
+        self.name_en = kwargs["name_en"]
+        self.description_cz = kwargs.get("description_cz")
+        self.description_en = kwargs.get("description_en")
+        self.model_parameter_set_id = kwargs.get("model_parameter_set_id")
+
+        self.name = {"cz": self.name_cz, "en": self.name_en}
+        self.description = {"cz": self.description_cz, "en": self.description_en}
+
+class QualityIndex:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
         self.name_cz = kwargs["name_cz"]

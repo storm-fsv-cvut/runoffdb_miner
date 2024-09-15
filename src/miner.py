@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import math
 import locale
+import re
 import pandas as pd
 from pint import UnitRegistry
 
@@ -439,6 +440,92 @@ class Miner:
             return None
         return
 
+    def generate_structured_dump(self, root_path, date_from = None, date_to = None, lang="en"):
+        # create runoffDB connection instance
+        rdb = RunoffDB()
+        # get dates when some simulation occurred
+        all_days = rdb.get_simulation_days(date_from, date_to)
+        print("\n")
+
+        for day_start in all_days:
+            day_end = day_start.replace(hour=23, minute=59, second=59)
+            # load runs of the day
+            day_runs = rdb.load_runs(date_from=day_start, date_to=day_end)
+            # no runs on day with simulations is a result of unfinished/messed-up record in DB (run group without any run)
+            if day_runs is not None:
+                day_dir = os.path.join(root_path, day_start.strftime('%Y-%m-%d'))
+                try:
+                    os.mkdir(day_dir)
+                except OSError as error:
+                   pass
+
+                for rid, run in day_runs.items():
+                    sim_dir_name = sanitize_path(f"{run.id}-{rdb.localities[run.locality_id].name}-{rdb.crops[run.crop_id].name[lang]}-{run.plot_id}-{rdb.run_types[run.run_type_id].name[lang]}")
+                    sim_dir = os.path.join(day_dir, sim_dir_name)
+                    print("\n"+80*"-")
+                    print(f"#{run.id} - {day_start.strftime('%d. %m. %Y')} - {rdb.localities[run.locality_id].name} - {rdb.crops[run.crop_id].name[lang]} - {run.plot_id} - {rdb.run_types[run.run_type_id].name[lang]}")
+                    print(80 * "-")
+                    try:
+                        os.mkdir(sim_dir)
+                    except OSError as error:
+                        pass
+                    run.save_metadata(os.path.join(sim_dir, sim_dir_name+".json"))
+
+                    # loop through all phenomena and if measurement exists go through it's records
+                    for phid in rdb.get_all_phenomena_ids():
+                        msrmnts = run.get_measurements(phid)
+                        if msrmnts is not None:
+                            for ms in msrmnts:
+                                # loop through units and if record exists export it
+                                for uid in rdb.get_all_units_ids():
+                                    rcrds = ms.get_records(uid)
+                                    if rcrds is not None:
+                                        recids = []
+                                        for rec in rcrds:
+                                            recids.append(rec.id)
+                                            if rec.record_type_id != 99:
+                                                # the dataframe is TimeDelta indexed if is_timeline attribute is True
+                                                index_column = "time" if rec.is_timeline else None
+                                                index = True if rec.is_timeline else False
+                                                # column_headers = ["time"] if rec.is_timeline else []
+                                                column_headers = []
+                                                data_df = rec.get_data("value", index_column=index_column)
+                                                if data_df is not None:
+                                                    rec_filename = sanitize_path(f"{rec.id}-{rec.unit.name[lang]}-[{rec.unit.unit}]")
+                                                    column_headers.append(f"{rec.unit.name[lang]} [{rec.unit.unit}]")
+                                                    column_headers.append(f"{rec.unit_rel_x.name[lang]} [{rec.unit_rel_x.unit}]") if rec.related_value_x_unit_id is not None else None
+                                                    column_headers.append(f"{rec.unit_rel_y.name[lang]} [{rec.unit_rel_y.unit}]") if rec.related_value_y_unit_id is not None else None
+                                                    column_headers.append(f"{rec.unit_rel_z.name[lang]} [{rec.unit_rel_z.unit}]") if rec.related_value_z_unit_id is not None else None
+
+                                                    # format the TimeDelta index to desired format (get rid of the '0 days')
+                                                    if pd.api.types.is_timedelta64_dtype(data_df.index):
+                                                        data_df.index = data_df.index.map(lambda
+                                                                                    x: f"{x.components.hours:02}:{x.components.minutes:02}:{x.components.seconds:02}")
+
+                                                    print(f"#{rec.id}: {column_headers} ({rdb.record_types[rec.record_type_id].name[lang]})")
+
+                                                    # if ms.phenomenon_id == 16:
+                                                    #     print(data_df)
+
+                                                    # try:
+                                                    data_df.to_csv(os.path.join(sim_dir, rec_filename+".csv"),
+                                                               index=index,
+                                                               sep=";",
+                                                               decimal=",",
+                                                               header=column_headers)
+                                                    # except ValueError:
+                                                    #     print(data_df)
+                                                else:
+                                                    print(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
+
+                                        # print(f"{phid} - {len(ms.records)} ({', '.join([str(rid) for rid in recids])})")
+
+
+
+            else:
+                print(f"\t{day_start.strftime('%Y-%m-%d')} skipped")
+        # load runs matching input conditions
+        # runs = rdb.load_runs(date_from=self.date_from, date_to=self.date_to)
 
     def generate_html_overview(self, output_path):
         cumulatives_headers1 = ["lokalita", "simID", "datum", "plot ID", "simulator ID", "plodina", "poc_stav",
@@ -466,56 +553,67 @@ class Miner:
         return
 
 
-    def generate_interval_values_csv(self, output_path, logfile_path = None):
+    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value = "NA", log_file=None):
+        rdb = RunoffDB()
         # the runs may not be loaded yet ...
-        if self.runs is None:
-            self.load_runs()
+        if rdb.runs is None:
+            rdb.load_runs(date_from = date_from, date_to = date_to)
 
-        if self.runs:
-            flowrates_headers = {"cz": ["lokalita", "simID", "datum", "plot ID", "simulator ID", "plodina", "poc_stav",
+        if rdb.runs:
+            flowrates_headers = {"cz": ["simID", "ID lokality", "lokalita", "datum", "plot ID", "ID simulatoru", "simulator", "ID plodiny", "plodina", "poc_stav",
                                  "poc_vlhkost", "canopy_cover", "BBCH", "intenzita", "TTR", "interval",
                                  "delka_intervalu", "t1", "t2", "prutok_l_min", "konc_sed_g_l", "ztrata_pudy_g_min"],
-                                 "en": ["locality", "run ID", "date", "plot ID", "simulator ID", "crop", "initial cond.",
+                                 "en": ["run ID", "locality ID", "locality", "date", "plot ID", "simulator ID", "simulator", "crop ID", "crop", "initial cond.",
                                     "init. moisture", "canopy cover", "BBCH", "rain intensity", "time to runoff", "interval #",
                                     "interval duration", "t1", "t2", "discharge [l.min-1]", "SS concentration [g.l-1]", "SS flux [g.min-1]"]}
 
             output_csv = open(output_path, "w")
             writeRowToCSV(output_csv, flowrates_headers[lang])
 
-            for run in self.runs.values():
-                # one row to be filled and written to the output files
+            for run in rdb.runs.values():
+                print()
+                # single row to be filled and written to the output files
+                # one line represents one time interval of a measured time series within a run
                 line = []
 
-                # gather all the info and values ========================================
-                line.append(run.locality_id)
+                print(
+                    f"#{run.id} - {run.datetime.strftime('%d. %m. %Y')} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]}")
+
+                # gather all the info and values common for the whole simulation run ===================================
                 line.append(run.id)
+                line.append(run.locality.id)
+                line.append(run.locality.name)
                 line.append(run.datetime.strftime('%d. %m. %Y'))
                 line.append(run.plot_id)
-                line.append(run.simulator_id)
-                crop_name = run.get_crop_name(lang)
-                if crop_name:
-                    line.append(crop_name)
-                else:
-                    line.append("NA")
-                line.append(self.run_types[run.run_type_id])
-                if run.initmoist_recid:
-                    line.append(run.get_initial_moisture_value())
-                else:
-                    line.append("NA")
-                if run.surface_cover_recid:
-                    line.append(run.get_surface_cover_value())
-                else:
-                    line.append("NA")
-                if run.bbch:
-                    line.append(run.bbch)
-                else:
-                    line.append("NA")
-                if run.rain_intensity_recid:
-                    line.append(run.get_rainfall_intensity())
-                else:
-                    line.append("NA")
+                line.append(run.simulator.id)
+                line.append(run.simulator.name[lang])
+                line.append(run.crop_id if run.crop_id is not None else no_data_value)
+                line.append(run.crop.name[lang] if run.crop.name[lang] is not None else no_data_value)
+                line.append(run.run_type.name[lang])
+                line.append(run.get_initial_moisture_value() if run.get_initial_moisture_value() is not None else no_data_value)
+                line.append(run.get_surface_cover_value() if run.get_surface_cover_value() is not None else no_data_value)
+                line.append(run.bbch if run.bbch is not None else no_data_value)
+                line.append(run.get_rainfall_intensity_value() if run.get_rainfall_intensity_value() is not None else no_data_value)
                 line.append(run.ttr)
 
+                runoff_rec = run.get_best_runoff_record()
+                sedconc_rec = run.get_best_sediment_concentration_record()
+
+                if runoff_rec is not None and sedconc_rec is not None:
+                    # gather or calculate values of the measure records
+                    i = 1
+                    prev_time = None
+                    runoff_data = runoff_rec.get_data("runoff")
+                    # print(runoff_data)
+                    for time in runoff_data.index:
+                        line_int = []
+                        line_int.append(i)
+                        line_int.append(time-prev_time) if prev_time is not None else line_int.append(no_data_value)
+                        prev_time = time
+                        line_int.append(time)
+                        line_int.append(time-run.ttr)
+                        i += 1
+                        writeRowToCSV(output_csv, line+line_int)
             output_csv.close()
         else:
             print("No runs available within given limits.")
@@ -981,128 +1079,128 @@ class Miner:
 
                 line.append(runoff_mm)
 
-                # headers.append("Runoff coefficient")
+                headers.append("Runoff coefficient")
+                notes.append("")
+                poznamky.append("")
+                if rainfall_mm not in (None, "NA") and runoff_mm not in (None, "NA"):
+                    line.append(runoff_mm/rainfall_mm)
+                else:
+                    line.append("NA ")
+                #
+                # headers.append("Soil Erosion (g)")
                 # notes.append("")
                 # poznamky.append("")
-                # if rainfall_mm not in (None, "NA") and runoff_mm not in (None, "NA"):
-                #     line.append(runoff_mm/rainfall_mm)
-                # else:
-                #     line.append("NA ")
-                # #
-                # # headers.append("Soil Erosion (g)")
-                # # notes.append("")
-                # # poznamky.append("")
-                #
-                # headers.append("Soil Erosion (Mg/ha)")
-                # notes.append("")
-                # poznamky.append("")
-                #
-                # # search for sediment concentration records
-                # sediment_data = None
-                # # go through the record type priority list and find the first matching Record
-                # for record_type in self.ss_types_view_order:
-                #     # get the best sediment concentration measurement Record(s)
-                #     found_records = run.get_records(2, [2, 3], record_type_id = record_type)
-                #     if found_records is not None:
-                #         if len(found_records) > 1:
-                #             print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
-                #                   f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
-                #         ss_record = found_records[0]
-                #         # get the sediment concentration data in [g.l-1]
-                #         sediment_data = ss_record.get_data_in_unit(3, sed_conc_label)
-                #         # if sediment data exist break the search cycle
-                #         if sediment_data is not None:
-                #             try:
-                #                 get_zero_timestamp(sediment_data, sed_conc_label)
-                #             except ValueError as e:
-                #                 catchThem.append(ss_record.id)
-                #                 print(
-                #                     f"Integration by time failed on total sedtest calculation - data frame index is not TimeDelta")
-                #                 sediment_data = None
-                #             # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
-                #             break
-                #
-                # # initiate with NA values that will be used if no valid data is found
-                # soilloss_g = "NA"
-                # soilloss_Mg_ha = "NA"
-                # # if both runoff and sediment concentration data are found
-                # if runoff_data is not None and sediment_data is not None:
-                #     # if both dataframes have some data
-                #     if not runoff_data.empty and not sediment_data.empty:
-                #         # a common zero time is added (if possible) to force the integration from very start
-                #         # and to allow for cross-interpolation if the sediment series starts later than the runoff series
-                #         t0 = get_zero_timestamp(runoff_data, runoff_label)
-                #         if t0:
-                #             runoff_data.loc[pd.Timedelta(t0)] = 0
-                #             runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
-                #             runoff_data.sort_index()
-                #             # if the zero time from runoff series is before the first value of sediment series (should be)
-                #             if t0 < sediment_data.index[0]:
-                #                 # New row to add
-                #                 sediment_data.loc[pd.Timedelta(t0)] = 0
-                #                 sediment_data = pd.concat([sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
-                #                 sediment_data.sort_index()
-                #         else:  # assign the runoff start time as t0
-                #             t0 = run.ttr
-                #         print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
-                #         print(f"sediment data (record #{ss_record.id}):\n{sediment_data}\n")
-                #
-                #         # merge the two dataframes into one with common 'time' index
-                #         merged_data = pd.concat([runoff_data, sediment_data], axis=1, join='outer')
-                #         # re-order the rows by time
-                #         try:
-                #             merged_data.sort_index(inplace=True)
-                #         except TypeError as e:
-                #             print(f"Incompatible indexes in input dataframes - runoff or sediment record is not a timeline")
-                #             catchThem.append(ss_record.id)
-                #
-                #         # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
-                #         merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
-                #         merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
-                #         # replace possible NaN at the very beginning of time series with 0
-                #         # (situation when runoff has started but no sediment concentration data are available yet)
-                #         merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
-                #         # calculate the sediment flux [g.min-1]
-                #         print(f"merged runoff and sediment concentration data:\n{merged_data}\n\n")
-                #         merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
-                #         # write the cumulative values at the end of series
-                #         try:
-                #             soilloss_g = integrate_series_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
-                #         except ValueError as e:
-                #             print(f"Integration by time failed on soil loss calculation - data frame index is not TimeDelta")
-                #             soilloss_Mg_ha = "NA"
-                #         else:
-                #             soilloss_Mg_ha = soilloss_g/1000000/plot_area*10000
-                # else:
-                #     soilloss_g = "NA"
-                #     soilloss_Mg_ha = "NA"
-                #     # ignore the whole simulation run if runoff or sediment is not available
-                #     continue
-                #
-                # # line.append(soilloss_g)
-                # line.append(soilloss_Mg_ha)
-                #
-                # headers.append("Sediments (texture)")
-                # notes.append("")
-                # poznamky.append("")
-                # line.append("NA")
-                #
-                # headers.append("Sediments (%OM/%SOC)")
-                # notes.append("")
-                # poznamky.append("")
-                # line.append("NA")
-                #
-                # headers.append("Sediments (Nutrients g/kg)")
-                # notes.append("")
-                # poznamky.append("")
-                # line.append("NA")
-                #
-                # headers.append("Extra info")
-                # if run.locality_id == 10:
-                #     line.append("performed on disturbed soil sample container")
-                # else:
-                #     line.append("")
-                #
+
+                headers.append("Soil Erosion (Mg/ha)")
+                notes.append("")
+                poznamky.append("")
+
+                # search for sediment concentration records
+                sediment_data = None
+                # go through the record type priority list and find the first matching Record
+                for record_type in self.ss_types_view_order:
+                    # get the best sediment concentration measurement Record(s)
+                    found_records = run.get_records(2, [2, 3], record_type_id = record_type)
+                    if found_records is not None:
+                        if len(found_records) > 1:
+                            print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
+                                  f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
+                        ss_record = found_records[0]
+                        # get the sediment concentration data in [g.l-1]
+                        sediment_data = ss_record.get_data_in_unit(3, sed_conc_label)
+                        # if sediment data exist break the search cycle
+                        if sediment_data is not None:
+                            try:
+                                get_zero_timestamp(sediment_data, sed_conc_label)
+                            except ValueError as e:
+                                catchThem.append(ss_record.id)
+                                print(
+                                    f"Integration by time failed on total sedtest calculation - data frame index is not TimeDelta")
+                                sediment_data = None
+                            # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
+                            break
+
+                # initiate with NA values that will be used if no valid data is found
+                soilloss_g = "NA"
+                soilloss_Mg_ha = "NA"
+                # if both runoff and sediment concentration data are found
+                if runoff_data is not None and sediment_data is not None:
+                    # if both dataframes have some data
+                    if not runoff_data.empty and not sediment_data.empty:
+                        # a common zero time is added (if possible) to force the integration from very start
+                        # and to allow for cross-interpolation if the sediment series starts later than the runoff series
+                        t0 = get_zero_timestamp(runoff_data, runoff_label)
+                        if t0:
+                            runoff_data.loc[pd.Timedelta(t0)] = 0
+                            runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
+                            runoff_data.sort_index()
+                            # if the zero time from runoff series is before the first value of sediment series (should be)
+                            if t0 < sediment_data.index[0]:
+                                # New row to add
+                                sediment_data.loc[pd.Timedelta(t0)] = 0
+                                sediment_data = pd.concat([sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
+                                sediment_data.sort_index()
+                        else:  # assign the runoff start time as t0
+                            t0 = run.ttr
+                        print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
+                        print(f"sediment data (record #{ss_record.id}):\n{sediment_data}\n")
+
+                        # merge the two dataframes into one with common 'time' index
+                        merged_data = pd.concat([runoff_data, sediment_data], axis=1, join='outer')
+                        # re-order the rows by time
+                        try:
+                            merged_data.sort_index(inplace=True)
+                        except TypeError as e:
+                            print(f"Incompatible indexes in input dataframes - runoff or sediment record is not a timeline")
+                            catchThem.append(ss_record.id)
+
+                        # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
+                        merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
+                        merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
+                        # replace possible NaN at the very beginning of time series with 0
+                        # (situation when runoff has started but no sediment concentration data are available yet)
+                        merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
+                        # calculate the sediment flux [g.min-1]
+                        print(f"merged runoff and sediment concentration data:\n{merged_data}\n\n")
+                        merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
+                        # write the cumulative values at the end of series
+                        try:
+                            soilloss_g = integrate_series_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
+                        except ValueError as e:
+                            print(f"Integration by time failed on soil loss calculation - data frame index is not TimeDelta")
+                            soilloss_Mg_ha = "NA"
+                        else:
+                            soilloss_Mg_ha = soilloss_g/1000000/plot_area*10000
+                else:
+                    soilloss_g = "NA"
+                    soilloss_Mg_ha = "NA"
+                    # ignore the whole simulation run if runoff or sediment is not available
+                    continue
+
+                # line.append(soilloss_g)
+                line.append(soilloss_Mg_ha)
+
+                headers.append("Sediments (texture)")
+                notes.append("")
+                poznamky.append("")
+                line.append("NA")
+
+                headers.append("Sediments (%OM/%SOC)")
+                notes.append("")
+                poznamky.append("")
+                line.append("NA")
+
+                headers.append("Sediments (Nutrients g/kg)")
+                notes.append("")
+                poznamky.append("")
+                line.append("NA")
+
+                headers.append("Extra info")
+                if run.locality_id == 10:
+                    line.append("performed on disturbed soil sample container")
+                else:
+                    line.append("")
+
                 lines.append(line)
 
             print(headers)
@@ -1337,6 +1435,10 @@ class Miner:
 
         return
 
+def sanitize_path(path_str):
+    # Replace invalid characters for both Windows and Unix-like systems
+    sanitized = re.sub(r'[<>:"/\\|?* ]', '_', path_str)
+    return sanitized
 def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative = True, return_int = True, smallest_content = 1):
     # ensure original_texture is a pandas DataFrame
     if not isinstance(original_texture, pd.DataFrame):
