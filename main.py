@@ -37,7 +37,9 @@ if __name__ == '__main__':
     # miner.date_from = "2020-04-08"
     # miner.date_to = "2023-12-31"
     # miner.generate_euro_table("d:/Downloads/euro_export.csv")
-    miner.generate_interval_values_csv("d:/Downloads/runoff_sediment_new.csv", date_from="1990-01-01", log_file="d:/Downloads/log.txt")
+    miner.generate_interval_values_csv(f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}.csv",
+                                       date_from="1990-01-01",
+                                       log_file="d:/Downloads/log.txt")
     # miner.generate_cumulative_values_csv("d:/Downloads/runoff_sediment_cumulative.csv", plots_dir="d:/Downloads/cum_plots")
     # miner.generate_html_overview("d:/Downloads/overview.html")
 

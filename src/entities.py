@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import pandas as pd
 from datetime import datetime, time
 import json
@@ -100,6 +102,16 @@ class RunoffDB:
 
 
     def load_runs(self, limit = None, date_from = None, date_to = None, simulators = None, localities = None, crops = None):
+        """
+        Loads Run objects from database filtered to match given limitations. Loads all simulation runs if no filtres provided.
+        :param limit: number of runs to load
+        :param date_from: load runs older than ('YYYY-MM-DD' format)
+        :param date_to: load runs younger than ('YYYY-MM-DD' format)
+        :param simulators: load runs performed with given simulator/s (list of simulator IDs)
+        :param localities: load runs performed on given locality/localities (list of locality IDs)
+        :param crops: load runs performed on a plot with given crop/s (list of crop IDs)
+        :return:
+        """
         with self.dbcon.cursor(dictionary=True) as thecursor:
             # start of the query
             query = f"SELECT {self.runs_table}.`id` AS run_id, " \
@@ -130,7 +142,12 @@ class RunoffDB:
                 query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
             if date_to is not None:
                 query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
-
+            if simulators is not None:
+                query += f" AND {self.sequences_table}.`simulator_id` IN '{', '.join([str(s) for s in simulators])}'"
+            if localities is not None:
+                query += f" AND {self.plots_table}.`locality_id` IN '{', '.join([str(s) for s in localities])}'"
+            if crops is not None:
+                query += f" AND {self.runs_table}.`crop_id` IN '{', '.join([str(s) for s in crops])}'"
             # additional conditions
             # query += f"AND `` = "
 
@@ -157,7 +174,7 @@ class RunoffDB:
                 return run_dict
             return None
 
-    def load_plots(self, id = None):
+    def load_plots(self, id=None):
         with self.dbcon.cursor(dictionary=True) as thecursor:
             # start of the query
             query = f"SELECT * FROM {self.plots_table}"
@@ -180,7 +197,7 @@ class RunoffDB:
                 return plot_dict
             return None
 
-    def load_samples(self, id = None):
+    def load_samples(self, id=None):
         with self.dbcon.cursor(dictionary=True) as thecursor:
             query = f"SELECT * FROM {self.soil_samples_table}"
             if id is not None:
@@ -202,7 +219,7 @@ class RunoffDB:
 
             return None
 
-    def load_simulators(self, id = None):
+    def load_simulators(self, id=None):
         with self.dbcon.cursor(dictionary=True) as thecursor:
             query = f"SELECT * FROM {self.simulators_table}"
             if id is not None:
@@ -220,7 +237,7 @@ class RunoffDB:
             thecursor.close()
         return simulators
 
-    def load_organizations(self, id = None):
+    def load_organizations(self, id=None):
         with self.dbcon.cursor(dictionary=True) as thecursor:
             query = f"SELECT * FROM {self.organizations_table}"
             if id is not None:
@@ -238,7 +255,7 @@ class RunoffDB:
             thecursor.close()
         return organizations
 
-    def load_localities(self, id = None):
+    def load_localities(self, id=None):
         with self.dbcon.cursor(dictionary=True) as thecursor:
             query = f"SELECT * FROM {self.localities_table}"
             if id is not None:

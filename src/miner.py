@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import time
 import os
 import matplotlib.pyplot as plt
@@ -107,7 +109,7 @@ class Miner:
                     sim_dir_name = sanitize_path(f"{run.id}-{rdb.localities[run.locality_id].name}-{rdb.crops[run.crop_id].name[lang]}-{run.plot_id}-{rdb.run_types[run.run_type_id].name[lang]}")
                     sim_dir = os.path.join(day_dir, sim_dir_name)
                     print("\n"+80*"-")
-                    print(f"#{run.id} - {day_start.strftime('%d. %m. %Y')} - {rdb.localities[run.locality_id].name} - {rdb.crops[run.crop_id].name[lang]} - {run.plot_id} - {rdb.run_types[run.run_type_id].name[lang]}")
+                    print(f"#{run.id} - {czech_date(day_start)} - {rdb.localities[run.locality_id].name} - {rdb.crops[run.crop_id].name[lang]} - {run.plot_id} - {rdb.run_types[run.run_type_id].name[lang]}")
                     print(80 * "-")
                     try:
                         os.mkdir(sim_dir)
@@ -204,17 +206,17 @@ class Miner:
             rdb.load_runs(date_from = date_from, date_to = date_to)
 
         if rdb.runs:
-            flowrates_headers = {"cz": ["ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "délka plochy [m]",
+            headers = {"cz": ["ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "délka plochy [m]",
                                         "šířka plochy [m]", "sklon plochy [%]", "ID simulátoru", "simulátor", "ID plodiny", "plodina", "počáteční stav",
-                                        "počáteční vlhkost", "zakrytí povrchu", "BBCH", "intenzita srážky [mm/h]", "TTR", "interval",
+                                        "počáteční vlhkost", "zakrytí povrchu [%]", "BBCH", "intenzita srážky [mm/h]", "TTR", "interval",
                                         "délka intervalu", "t1", "t2", "průtok [l/min]", "koncentrace sedimentu [g/l]", "ztráta půdy [g/min]"],
                                  "en": ["run ID", "locality ID", "locality", "date", "plot ID", "plot length [m]",
                                         "plot width [m]", "plot slope [%]","simulator ID", "simulator", "crop ID", "crop", "initial cond.",
-                                        "init. moisture", "surface cover", "BBCH", "rain intensity [mm.h-1]", "time to runoff", "interval #",
+                                        "init. moisture", "surface cover [%]", "BBCH", "rain intensity [mm.h-1]", "time to runoff", "interval #",
                                         "interval duration", "t1", "t2", "discharge [l.min-1]", "SS concentration [g.l-1]", "SS flux [g.min-1]"]}
 
-            output_csv = open(output_path, "w")
-            writeRowToCSV(output_csv, flowrates_headers[lang])
+            output_csv = open(output_path, "w", encoding="utf-8")
+            writeRowToCSV(output_csv, headers[lang])
             # list of records that have is_timeline issue
             invalid_record_ids = []
             for run in rdb.runs.values():
@@ -223,8 +225,7 @@ class Miner:
                 # one line represents one time interval of a measured time series within a run
                 line = []
 
-                print(
-                    f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]}")
+                print(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]}")
 
                 # gather all the info and values common for the whole simulation run ===================================
                 line.append(run.id)
@@ -254,7 +255,7 @@ class Miner:
                     runoff_label = "runoff_rate"
                     sed_conc_label = f"sediment_concentration"
                     sed_flux_label = f"sediment_flux"
-                    # here concetanating of runfoff, sediment concentration and sediment yield calculation will be performed ...
+
                     # get runoff data in [l.min-1]
                     runoff_data = runoff_record.get_data_in_unit(1, runoff_label)
                     # get the sediment concentration data in [g.l-1]
@@ -264,10 +265,7 @@ class Miner:
                     if not runoff_data.empty and not sed_conc_data.empty:
                         # data validity flag
                         invalid_data = []
-                        # prepare column labels for dataframes
-                        runoff_label = "runoff_rate"
-                        sed_conc_label = f"sediment_concentration"
-                        sed_flux_label = f"sediment_flux"
+
                         if not isinstance(runoff_data.index, pd.TimedeltaIndex):
                             print(
                                 f"\t\trunoff record {runoff_record.id} data index is not a TimeDeltaIndex!\n"
@@ -329,11 +327,10 @@ class Miner:
                             merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
                             # calculate the sediment flux [g.min-1]
                             merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
-                            print(f"runoff + sediment concentration + sediment flux:\n{merged_data}\n\n")
+                            # print(f"runoff + sediment concentration + sediment flux:\n{merged_data}\n\n")
 
                             i = 1
                             prev_index = None
-
                             for index, row in merged_data.iterrows():
                                 line_int = []
 
@@ -953,7 +950,7 @@ class Miner:
             print(headers)
             print(lines)
             # write everything to output table
-            output_csv = open(output_path, "w")
+            output_csv = open(output_path, "w", encoding="utf-8")
             # writeRowToCSV(output_csv, poznamky)
             writeRowToCSV(output_csv, notes)
             writeRowToCSV(output_csv, headers)
@@ -999,7 +996,7 @@ class Miner:
             cumulatives_headers2 = ["", "", "", "", "", "", "", "", "", "", "", "", "", "t1=10min", "", "t1=20min", "", "t1=30min"]
 
             # open the file for writing, overwrite if exists, write file headers
-            output_csv = open(output_path, "w")
+            output_csv = open(output_path, "w", encoding="utf-8")
             writeRowToCSV(output_csv, cumulatives_headers2)
             writeRowToCSV(output_csv, cumulatives_headers1[lang])
 
