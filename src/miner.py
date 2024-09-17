@@ -24,14 +24,17 @@ celld = ";"
 
 
 class Miner:
-    def __init__(self, date_from = None, date_to = None, simulators = None, localities = None, crops = None):
+    def __init__(self, date_from=None, date_to=None, simulators=None, localities=None, crops=None):
         # limits for data loads
         self.date_from = date_from
         self.date_to = date_to
+        self.simulators = simulators
+        self.localities = localities
+        self.crops = crops
 
         # record type priorities
-        self.runoff_types_view_order = [2, 3, 4, 1, 6, 7, 5]
-        self.ss_types_view_order = [2, 3, 4, 1, 6, 7, 5]
+        self.runoff_types_view_order = [2, 1, 3, 4, 6, 7, 8, 5]
+        self.ss_types_view_order = [2, 1, 3, 4, 6, 7, 8, 5]
         # 1 - raw data
         # 2 - edited data
         # 3 - homogenized edited data
@@ -41,365 +44,6 @@ class Miner:
         # 7 - estimated from similar conditions
         # 8 - rough estimate
 
-    #
-    # def load_runs(self, limit = None, dateFrom = None, dateTo = None):
-    #     dbcon = self.dbc.connect()
-    #     # use global date limits if not specified
-    #     dateFrom = dateFrom if dateFrom is not None else self.date_from
-    #     dateTo = dateTo if dateTo is not None else self.date_to
-    #
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #
-    #         # start of the query
-    #         query = f"SELECT {runs_table}.`id` AS run_id, " \
-    #                 f"{runs_table}.`runoff_start` AS ttr, " \
-    #                 f"{runs_table}.`init_moisture_id` AS initmoist_recid, " \
-    #                 f"{runs_table}.`surface_cover_id` AS surface_cover_recid, " \
-    #                 f"{runs_table}.`rain_intensity_id` AS rainfall_recid, " \
-    #                 f"{runs_table}.`soil_sample_bulk_id` AS bulkd_ss_id, " \
-    #                 f"{runs_table}.`soil_sample_texture_id` AS texture_ss_id, "\
-    #                 f"{runs_table}.`soil_sample_corg_id` AS corg_ss_id, "\
-    #                 f"{run_groups_table}.`sequence_id` AS sequence_id, " \
-    #                 f"{run_groups_table}.`datetime` AS datetime, " \
-    #                 f"{sequences_table}.`simulator_id` AS simulator_id, " \
-    #                 f"{runs_table}.`run_group_id` AS run_group_id, " \
-    #                 f"{run_groups_table}.`run_type_id` AS run_type_id, " \
-    #                 f"{plots_table}.`locality_id` AS locality_id, " \
-    #                 f"{plots_table}.`id` AS plot_id, " \
-    #                 f"{plots_table}.`crop_id` AS crop_id, " \
-    #                 f"{crops_table}.`crop_type_id` AS crop_type_id "\
-    #                 f"FROM {runs_table} " \
-    #                 f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
-    #                 f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
-    #                 f"JOIN {plots_table} ON {runs_table}.`plot_id` = {plots_table}.`id` " \
-    #                 f"JOIN {crops_table} ON {plots_table}.`crop_id` = {crops_table}.`id` "\
-    #                 f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-    #         if dateFrom is not None:
-    #             query += f" AND {run_groups_table}.`datetime` > '{dateFrom}'"
-    #         if dateTo is not None:
-    #             query += f" AND {run_groups_table}.`datetime` < '{dateTo}'"
-    #
-    #         # additional conditions
-    #         # query += f"AND `` = "
-    #
-    #         # end of the query
-    #         query += " ORDER BY `datetime` ASC"
-    #
-    #         if limit:
-    #             query += f" LIMIT {limit}"
-    #         # execute the query and fetch the results
-    #         thecursor.execute(query)
-    #
-    #         results = thecursor.fetchall()
-    #
-    #         run_dict = {}
-    #         if thecursor.rowcount > 0:
-    #             for r in results:
-    #                 new_run = Run(**r)
-    #                 new_run.load_measurements()
-    #                 new_run.plot = self.plots.get(new_run.plot_id)
-    #                 # new_run.show_details()
-    #                 run_dict.update({new_run.id: new_run})
-    #             dbcon.close()
-    #             self.runs = run_dict
-    #             return run_dict
-    #
-    #         dbcon.close()
-    #         return None
-    #     return None
-    #
-    # def load_plots(self, dateFrom = None, dateTo = None):
-    #     dbcon = self.dbc.connect()
-    #
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #
-    #         # start of the query
-    #         query = f"SELECT * FROM {plots_table} "
-    #         if dateFrom is not None:
-    #             query += f" AND `established` > '{dateFrom}'"
-    #         if dateTo is not None:
-    #             query += f" AND `established` < '{dateTo}'"
-    #
-    #         # end of the query
-    #         query += " ORDER BY `id` ASC"
-    #
-    #         # execute the query and fetch the results
-    #         thecursor.execute(query)
-    #
-    #         results = thecursor.fetchall()
-    #
-    #         plot_dict = {}
-    #         if thecursor.rowcount > 0:
-    #             for r in results:
-    #                 new_plot = Plot(r)
-    #                 plot_dict.update({new_plot.id: new_plot})
-    #             dbcon.close()
-    #             return plot_dict
-    #
-    #         dbcon.close()
-    #         return None
-    #     return None
-    #
-    # def load_samples(self):
-    #     dbcon = self.dbc.connect()
-    #
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #
-    #         query = f"SELECT * FROM {soil_samples_table} ORDER BY `id` ASC"
-    #
-    #         thecursor.execute(query)
-    #
-    #         results = thecursor.fetchall()
-    #
-    #         samples_dict = {}
-    #         if thecursor.rowcount > 0:
-    #             for r in results:
-    #                 new_sample = SoilSample(r)
-    #                 samples_dict.update({new_sample.id: new_sample})
-    #             dbcon.close()
-    #             return samples_dict
-    #
-    #         dbcon.close()
-    #         return None
-    #     return None
-    #
-    # def load_simulators(self, lang):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor()
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT `id`, `name_{lang}` "
-    #                           "FROM `simulator`")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             simulators = {}
-    #             for r in results:
-    #                 simulators.update({r[0]: r[1]})
-    #             self.simulators = simulators
-    #         dbcon.close()
-    #         return simulators
-    #     return False
-    #
-    # def load_localities(self):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor()
-    #         # execute the query and fetch the results
-    #         thecursor.execute("SELECT `id`, `name`, `lat`, `lng` "
-    #                           "FROM `locality`")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             localities = {}
-    #             for r in results:
-    #                 localities.update({r[0]: {"name": r[1], "lat": r[2], "long": r[3]}})
-    #         dbcon.close()
-    #         return localities
-    #     return False
-    #
-    # def load_run_types(self, lang):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor()
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {run_types_table}")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             run_types_names = {}
-    #             for r in results:
-    #                 run_types_names.update({r[0]: r[1]})
-    #         dbcon.close()
-    #         return run_types_names
-    #     return None
-    #
-    # def load_crop_types(self, lang):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor()
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {crop_types_table}")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             crop_types_names = {}
-    #             for r in results:
-    #                 crop_types_names.update({r[0]: r[1]})
-    #         dbcon.close()
-    #         return crop_types_names
-    #     return None
-    #
-    # def load_protection_measures(self, lang):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor()
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT `id`, `name_{lang}` FROM {protection_measures_table}")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             protection_measures_names = {}
-    #             for r in results:
-    #                 protection_measures_names.update({r[0]: r[1]})
-    #         dbcon.close()
-    #         return protection_measures_names
-    #     return None
-    #
-    # def load_units(self):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT * FROM {units_table}")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             units = {}
-    #             for r in results:
-    #                 new_unit = Unit(**r)
-    #                 units.update({new_unit.id: new_unit})
-    #         dbcon.close()
-    #         return units
-    #     return None
-    #
-    # def load_projects(self):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT * FROM {projects_table}")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             projects = {}
-    #             for r in results:
-    #                 new_project = Project(**r)
-    #                 projects.update({new_project.id: new_project})
-    #         dbcon.close()
-    #         return projects
-    #     return None
-    #
-    # def load_crops(self):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT * FROM {crops_table}")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             crops = {}
-    #             for r in results:
-    #                 new_crop = Crop(r)
-    #                 crops.update({new_crop.id: new_crop})
-    #         dbcon.close()
-    #         return crops
-    #     return None
-    #
-    # def load_agrotechnologies(self):
-    #     dbcon = self.dbc.connect()
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #         # execute the query and fetch the results
-    #         thecursor.execute(f"SELECT * FROM {agrotechnologies_table}")
-    #         results = thecursor.fetchall()
-    #         if thecursor.rowcount > 0:
-    #             agrotechnologies = {}
-    #             for r in results:
-    #                 new_agt = Agrotechnology(**r)
-    #                 agrotechnologies.update({new_agt.id: new_agt})
-    #         dbcon.close()
-    #         return agrotechnologies
-    #     return None
-    #
-    # def load_record(self, record_id):
-    #     dbcon = self.dbc.connect()
-    #
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #
-    #         # start of the query
-    #         query = f"SELECT * FROM {records_table} WHERE `id` = {record_id}"
-    #         # execute the query and fetch the results
-    #         thecursor.execute(query)
-    #
-    #         results = thecursor.fetchone()
-    #         if thecursor.rowcount > 0:
-    #             dbcon.close()
-    #             return Record(**results)
-    #         else:
-    #             dbcon.close()
-    #             return None
-    #     return None
-    #
-    # def get_simulation_days(self, dateFrom = None, dateTo = None):
-    #     dbcon = self.dbc.connect()
-    #     # use instances date limits if not specified
-    #     dateFrom = dateFrom if dateFrom is not None else self.date_from
-    #     dateTo = dateTo if dateTo is not None else self.date_from
-    #
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #
-    #         # start of the query
-    #         query = f"SELECT DISTINCT {run_groups_table}.`datetime` AS datetime, " \
-    #                 f"{run_groups_table}.`sequence_id` AS sequence_id, " \
-    #                 f"{runs_table}.`id` AS run_id " \
-    #                 f"FROM {runs_table} " \
-    #                 f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
-    #                 f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
-    #                 f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-    #         if dateFrom is not None:
-    #             query += f" AND {run_groups_table}.`datetime` > '{dateFrom}'"
-    #         if dateTo is not None:
-    #             query += f" AND {run_groups_table}.`datetime` < '{dateTo}'"
-    #
-    #         # additional conditions
-    #         # query += f"AND `` = "
-    #
-    #         # end of the query
-    #         query += " ORDER BY `datetime` ASC"
-    #
-    #         # execute the query and fetch the results
-    #         thecursor.execute(query)
-    #
-    #         results = thecursor.fetchall()
-    #
-    #         sim_days = []
-    #         if thecursor.rowcount > 0:
-    #             for r in results:
-    #                 sim_days.append(r['datetime'])
-    #
-    #             dbcon.close()
-    #             return sim_days
-    #
-    #         dbcon.close()
-    #         return None
-    #     return None
-    #
-    # def load_sequence_ids_by_date(self, datetime):
-    #     dbcon = self.dbc.connect()
-    #
-    #     if dbcon:
-    #         thecursor = dbcon.cursor(dictionary=True)
-    #
-    #         # start of the query
-    #         query = f"SELECT {runs_table}.`id` AS run_id, " \
-    #                 f"{run_groups_table}.`id` AS group_id, " \
-    #                 f"{run_groups_table}.`sequence_id` AS sequence_id " \
-    #                 f"FROM {runs_table} "\
-    #                 f"JOIN {run_groups_table} ON {runs_table}.`run_group_id` = {run_groups_table}.`id` " \
-    #                 f"JOIN {sequences_table} ON {run_groups_table}.`sequence_id` = {sequences_table}.`id` " \
-    #                 f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) " \
-    #                 f"AND {run_groups_table}.`datetime` = '{datetime}'"
-    #
-    #         # execute the query and fetch the results
-    #         thecursor.execute(query)
-    #         results = thecursor.fetchall()
-    #
-    #         if thecursor.rowcount > 0:
-    #             dbcon.close()
-    #             return results
-    #
-    #         dbcon.close()
-    #         return None
-    #     return None
 
     def repair_psd(self):
         """
@@ -553,23 +197,26 @@ class Miner:
         return
 
 
-    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value = "NA", log_file=None):
+    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", interpolate_zero_time=False, log_file=None):
         rdb = RunoffDB()
         # the runs may not be loaded yet ...
         if rdb.runs is None:
             rdb.load_runs(date_from = date_from, date_to = date_to)
 
         if rdb.runs:
-            flowrates_headers = {"cz": ["simID", "ID lokality", "lokalita", "datum", "plot ID", "ID simulatoru", "simulator", "ID plodiny", "plodina", "poc_stav",
-                                 "poc_vlhkost", "canopy_cover", "BBCH", "intenzita", "TTR", "interval",
-                                 "delka_intervalu", "t1", "t2", "prutok_l_min", "konc_sed_g_l", "ztrata_pudy_g_min"],
-                                 "en": ["run ID", "locality ID", "locality", "date", "plot ID", "simulator ID", "simulator", "crop ID", "crop", "initial cond.",
-                                    "init. moisture", "canopy cover", "BBCH", "rain intensity", "time to runoff", "interval #",
-                                    "interval duration", "t1", "t2", "discharge [l.min-1]", "SS concentration [g.l-1]", "SS flux [g.min-1]"]}
+            flowrates_headers = {"cz": ["ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "délka plochy [m]",
+                                        "šířka plochy [m]", "sklon plochy [%]", "ID simulátoru", "simulátor", "ID plodiny", "plodina", "počáteční stav",
+                                        "počáteční vlhkost", "zakrytí povrchu", "BBCH", "intenzita srážky [mm/h]", "TTR", "interval",
+                                        "délka intervalu", "t1", "t2", "průtok [l/min]", "koncentrace sedimentu [g/l]", "ztráta půdy [g/min]"],
+                                 "en": ["run ID", "locality ID", "locality", "date", "plot ID", "plot length [m]",
+                                        "plot width [m]", "plot slope [%]","simulator ID", "simulator", "crop ID", "crop", "initial cond.",
+                                        "init. moisture", "surface cover", "BBCH", "rain intensity [mm.h-1]", "time to runoff", "interval #",
+                                        "interval duration", "t1", "t2", "discharge [l.min-1]", "SS concentration [g.l-1]", "SS flux [g.min-1]"]}
 
             output_csv = open(output_path, "w")
             writeRowToCSV(output_csv, flowrates_headers[lang])
-
+            # list of records that have is_timeline issue
+            invalid_record_ids = []
             for run in rdb.runs.values():
                 print()
                 # single row to be filled and written to the output files
@@ -577,14 +224,17 @@ class Miner:
                 line = []
 
                 print(
-                    f"#{run.id} - {run.datetime.strftime('%d. %m. %Y')} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]}")
+                    f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]}")
 
                 # gather all the info and values common for the whole simulation run ===================================
                 line.append(run.id)
                 line.append(run.locality.id)
                 line.append(run.locality.name)
-                line.append(run.datetime.strftime('%d. %m. %Y'))
+                line.append(czech_date(run.datetime))
                 line.append(run.plot_id)
+                line.append(run.plot.plot_length)
+                line.append(run.plot.plot_width)
+                line.append(run.plot.plot_slope)
                 line.append(run.simulator.id)
                 line.append(run.simulator.name[lang])
                 line.append(run.crop_id if run.crop_id is not None else no_data_value)
@@ -596,25 +246,122 @@ class Miner:
                 line.append(run.get_rainfall_intensity_value() if run.get_rainfall_intensity_value() is not None else no_data_value)
                 line.append(run.ttr)
 
-                runoff_rec = run.get_best_runoff_record()
-                sedconc_rec = run.get_best_sediment_concentration_record()
+                runoff_record = run.get_best_runoff_record()
+                sed_conc_record = run.get_best_sediment_concentration_record()
+                # if both records were found
+                if runoff_record is not None and sed_conc_record is not None:
+                    # prepare column labels for dataframes
+                    runoff_label = "runoff_rate"
+                    sed_conc_label = f"sediment_concentration"
+                    sed_flux_label = f"sediment_flux"
+                    # here concetanating of runfoff, sediment concentration and sediment yield calculation will be performed ...
+                    # get runoff data in [l.min-1]
+                    runoff_data = runoff_record.get_data_in_unit(1, runoff_label)
+                    # get the sediment concentration data in [g.l-1]
+                    sed_conc_data = sed_conc_record.get_data_in_unit(3, sed_conc_label)
 
-                if runoff_rec is not None and sedconc_rec is not None:
-                    # gather or calculate values of the measure records
-                    i = 1
-                    prev_time = None
-                    runoff_data = runoff_rec.get_data("runoff")
-                    # print(runoff_data)
-                    for time in runoff_data.index:
-                        line_int = []
-                        line_int.append(i)
-                        line_int.append(time-prev_time) if prev_time is not None else line_int.append(no_data_value)
-                        prev_time = time
-                        line_int.append(time)
-                        line_int.append(time-run.ttr)
-                        i += 1
-                        writeRowToCSV(output_csv, line+line_int)
+                    # if both records have data
+                    if not runoff_data.empty and not sed_conc_data.empty:
+                        # data validity flag
+                        invalid_data = []
+                        # prepare column labels for dataframes
+                        runoff_label = "runoff_rate"
+                        sed_conc_label = f"sediment_concentration"
+                        sed_flux_label = f"sediment_flux"
+                        if not isinstance(runoff_data.index, pd.TimedeltaIndex):
+                            print(
+                                f"\t\trunoff record {runoff_record.id} data index is not a TimeDeltaIndex!\n"
+                                f"\t\t - the record either has invalid value in `is_timeline` column\n"
+                                f"\t\t - or the record is not a runoff rate record and should have different unit.\n"
+                                f"\t\tAssign correct unit to the record or repair record DB entry if unit is correct by:\n"
+                                f"\t\tUPDATE `record` set `is_timeline = 1 WHERE `id` = {runoff_record.id}\n")
+                            # print(runoff_data)
+                            invalid_data.append(f"runoff record {runoff_record.id} is not a timeline")
+                            invalid_record_ids.append(runoff_record.id)
+                        if not isinstance(sed_conc_data.index, pd.TimedeltaIndex):
+                            print(
+                                f"\t\trunoff record {sed_conc_record.id} data index is not a TimeDeltaIndex!\n"
+                                f"\t\t - the record either has invalid value in `is_timeline` column\n"
+                                f"\t\t - or the record is not a runoff rate record and should have different unit.\n"
+                                f"\t\tAssign correct unit to the record or repair record DB entry if unit is correct by:\n"
+                                f"\t\tUPDATE `record` set `is_timeline = 1 WHERE `id` = {sed_conc_record.id}\n")
+                            print(sed_conc_data)
+
+                            invalid_data.append(f"sediment concentration record  {sed_conc_record.id} is not a timeline")
+                            invalid_record_ids.append(sed_conc_record.id)
+
+                        if len(invalid_data) == 0:
+                            if interpolate_zero_time:
+                                # a common zero time is added (if possible) to force the integration from very start
+                                # and to allow for cross-interpolation if the sediment series starts later than the runoff series
+                                t0 = get_zero_timestamp(runoff_data, runoff_label)
+                                if t0:
+                                    runoff_data.loc[pd.Timedelta(t0)] = 0
+                                    runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
+                                    runoff_data.sort_index()
+                                    # if the zero time from runoff series is before the first value of sediment series (should be)
+                                    if t0 < sed_conc_data.index[0]:
+                                        # New row to add
+                                        sed_conc_data.loc[pd.Timedelta(t0)] = 0
+                                        sediment_data = pd.concat(
+                                            [sed_conc_data.tail(1), sed_conc_data.head(len(sed_conc_data) - 1)])
+                                        sediment_data.sort_index()
+                                else:  # assign the runoff start time as t0
+                                    t0 = run.ttr
+
+                            # print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
+                            # print(f"sediment data (record #{sed_conc_record.id}):\n{sed_conc_data}\n")
+
+                            # merge the two dataframes into one with common 'time' index
+                            merged_data = pd.concat([runoff_data, sed_conc_data], axis=1, join='outer')
+                            # re-order the rows by time
+                            try:
+                                merged_data.sort_index(inplace=True)
+                            except TypeError as e:
+                                print(
+                                    f"Incompatible indexes in input dataframes - runoff or sediment record is not a timeline")
+
+                            # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
+                            merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
+                            merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
+                            # replace possible NaN at the very beginning of time series with 0
+                            # (situation when runoff has started but no sediment concentration data are available yet)
+                            merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
+                            # calculate the sediment flux [g.min-1]
+                            merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
+                            print(f"runoff + sediment concentration + sediment flux:\n{merged_data}\n\n")
+
+                            i = 1
+                            prev_index = None
+
+                            for index, row in merged_data.iterrows():
+                                line_int = []
+
+                                t1 = format_timedelta(index)
+                                # skip time intervals before runoff appeared
+                                if run.ttr > index:
+                                    continue
+                                t2 = format_timedelta(index - run.ttr)
+                                int_dur = format_timedelta(index-prev_index) if prev_index is not None else no_data_value
+
+                                line_int.append(i)
+                                line_int.append(int_dur)
+                                line_int.append(t1)
+                                line_int.append(t2)
+                                line_int.append(row[runoff_label])
+                                line_int.append(row[sed_conc_label])
+                                line_int.append(row[sed_flux_label])
+                                prev_index = index
+                                i += 1
+                                # print(line_int)
+                                writeRowToCSV(output_csv, line+line_int)
+                        else:
+                            writeRowToCSV(output_csv, line + invalid_data)
+
             output_csv.close()
+            if len(invalid_record_ids) > 0:
+                print(f"\n\nUPDATE `record` set `is_timeline` = 1 WHERE `id` IN ({', '.join([str(rid) for rid in invalid_record_ids])})")
+
         else:
             print("No runs available within given limits.")
 
@@ -1869,8 +1616,17 @@ def writeHTMLheader(fileref):
     fileref.write(towrite)
     return
 
+def format_timedelta(td):
+    """Format a timedelta object by removing '0 days'."""
+    if isinstance(td, pd.Timedelta):
+        td_str = str(td)
+        return td_str.replace('0 days ', '') if '0 days' in td_str else td_str
+    else:
+        raise ValueError(f"input value '{td}' is not a TimeDelta instance.")
+
 def czech_date(datetime):
-    return f"{datetime.strftime('%d.').strip('0')} {datetime.strftime('%m.').strip('0')} {datetime.strftime('%Y')}"
+    return f"{datetime.strftime('%d. ').lstrip('0')} {datetime.strftime('%m. ').lstrip('0')} {datetime.strftime('%Y')}"
+
 def uka(data, depth = 0, ind = "."):
     """
     Prints out the structure of JSON-like container recursively

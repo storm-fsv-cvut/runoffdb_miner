@@ -61,7 +61,7 @@ class RunoffDB:
     vegetationcond_table = "`vegetation_condition`"
 
     # record type priorities
-    default_view_order = [2, 3, 4, 1, 6, 7, 5]
+    default_view_order = [2, 1, 3, 4, 6, 7, 8, 5]
     # 1 - raw data
     # 2 - edited data
     # 3 - homogenized edited data
@@ -661,6 +661,7 @@ class Run:
         :param multi_value: if False returns mean of all values if more than one data point belongs to the record or list of values if True
         :return: value of surface cover or list of all values in record
         """
+        # first check if the surface cover record is assigned to run
         if self.surface_cover_recid:
             surface_cover_rec = self.runoffdb.load_record(self.surface_cover_recid)
             surface_cover_rec.load_data("surface_cover")
@@ -675,6 +676,10 @@ class Run:
                     print(f"Surface cover record {surface_cover_rec.id} of run {self.id} has more then one value!")
                     print(f"Mean value of all {len(surface_cover_data.index)} data points was returned.")
                     return surface_cover_data["surface_cover"].mean()
+        # check crop type for "without cover" if no surface cover assigned to run
+        elif self.crop.crop_type_id == 10:
+            return 0
+
         else:
             print(f"\trun #{self.id} doesn't have surface cover record ID assigned.")
             return self.runoffdb.na_value
