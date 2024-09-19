@@ -173,7 +173,7 @@ class Miner:
         # load runs matching input conditions
         # runs = rdb.load_runs(date_from=self.date_from, date_to=self.date_to)
 
-    def generate_html_overview(self, output_path):
+    def generate_html_overview(self, output_path, date_from=None, date_to=None):
         cumulatives_headers1 = ["lokalita", "simID", "datum", "plot ID", "simulator ID", "plodina", "poc_stav",
                                       "poc_vlhkost", "canopy_cover", "BBCH", "intenzita", "TTR", "odtok_l",
                                       "ztrata_pudy_g", "odtok_l", "ztrata_pudy_g", "odtok_l", "ztrata_pudy_g"]
@@ -182,24 +182,42 @@ class Miner:
         output_html = open(output_path, "w")
         writeHTMLheader(output_html)
 
-        for sim_datetime in self.get_simulation_days(dateFrom=None, dateTo=None):
-            print(sim_datetime.strftime("%d.").lstrip("0") + " " + sim_datetime.strftime("%m.").lstrip(
-                "0") + " " + sim_datetime.strftime("%Y"))
-            print(f"\t{len(self.load_sequence_ids_by_date(sim_datetime))}")
+        rdb = RunoffDB()
+        # get dates when some simulation occurred
+        all_days = rdb.get_simulation_days(date_from, date_to)
+        print("\n")
 
-        for run in self.runs:
-            output_html.write(f"<h2>#{run.id} - {run.datetime.strftime('%d. %m. %Y')} - {run.crop_name}, {self.run_types[run.run_type_id]} </h2>\n")
-            output_html.write("<table>\n")
-            writeRowToHTML(output_html, cumulatives_headers2, True)
-            writeRowToHTML(output_html, cumulatives_headers1, True)
+        for day_start in all_days:
+            day_end = day_start.replace(hour=23, minute=59, second=59)
+            # load runs of the day
+            day_runs = rdb.load_runs(date_from=day_start, date_to=day_end)
 
-            output_html.write("</table>")
+            for run in day_runs:
+                output_html.write(f"<h2>#{run.id} - {run.datetime.strftime('%d. %m. %Y')} - {run.crop_name}, {self.run_types[run.run_type_id]} </h2>\n")
+                output_html.write("<table>\n")
+                writeRowToHTML(output_html, cumulatives_headers2, True)
+                writeRowToHTML(output_html, cumulatives_headers1, True)
+
+                output_html.write("</table>")
         output_html.write("</body>\n</html>")
         output_html.close()
         return
 
 
     def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", interpolate_zero_time=False, log_file=None):
+        """
+        Generates runoff and sediment export for all simulation runs fitting into given limits.
+        Each row in the output file represents a time interval in merged data of precipitation intensity, runoff rate, sediment concentration
+
+        :param output_path:
+        :param date_from:
+        :param date_to:
+        :param lang:
+        :param no_data_value:
+        :param interpolate_zero_time:
+        :param log_file:
+        :return:
+        """
         rdb = RunoffDB()
         # the runs may not be loaded yet ...
         if rdb.runs is None:
@@ -207,13 +225,17 @@ class Miner:
 
         if rdb.runs:
             headers = {"cz": ["ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "délka plochy [m]",
-                                        "šířka plochy [m]", "sklon plochy [%]", "ID simulátoru", "simulátor", "ID plodiny", "plodina", "počáteční stav",
-                                        "počáteční vlhkost", "zakrytí povrchu [%]", "BBCH", "intenzita srážky [mm/h]", "TTR", "interval",
-                                        "délka intervalu", "t1", "t2", "průtok [l/min]", "koncentrace sedimentu [g/l]", "ztráta půdy [g/min]"],
-                                 "en": ["run ID", "locality ID", "locality", "date", "plot ID", "plot length [m]",
-                                        "plot width [m]", "plot slope [%]","simulator ID", "simulator", "crop ID", "crop", "initial cond.",
-                                        "init. moisture", "surface cover [%]", "BBCH", "rain intensity [mm.h-1]", "time to runoff", "interval #",
-                                        "interval duration", "t1", "t2", "discharge [l.min-1]", "SS concentration [g.l-1]", "SS flux [g.min-1]"]}
+                            "šířka plochy [m]", "sklon plochy [%]", "ID simulátoru", "simulátor", "ID plodiny", "plodina", "počáteční stav",
+                            "počáteční vlhkost", "zakrytí povrchu [%]", "BBCH", "intenzita srážky [mm/h]",
+                              "TTR", "interval", "délka intervalu", "t1", "t2", "srážkový úhrn [mm]",
+                              "průtok [l/min]", "celkový odtok [l]", "koncentrace sedimentu [g/l]", "tok sedimentu[g/min]",
+                              "ztráta půdy [g]"],
+                     "en": ["run ID", "locality ID", "locality", "date", "plot ID", "plot length [m]",
+                            "plot width [m]", "plot slope [%]","simulator ID", "simulator", "crop ID", "crop", "initial cond.",
+                            "init. moisture", "surface cover [%]", "BBCH", "rain intensity [mm.h-1]",
+                            "time to runoff", "interval #", "interval duration", "t1", "t2", "rainfall total [mm]",
+                            "flow rate [l.min-1]", "total discharge [l]", "SS concentration [g.l-1]", "SS flux [g.min-1]",
+                            "sediment yield[g]"]}
 
             output_csv = open(output_path, "w", encoding="utf-8")
             writeRowToCSV(output_csv, headers[lang])
@@ -244,47 +266,47 @@ class Miner:
                 line.append(run.get_initial_moisture_value() if run.get_initial_moisture_value() is not None else no_data_value)
                 line.append(run.get_surface_cover_value() if run.get_surface_cover_value() is not None else no_data_value)
                 line.append(run.bbch if run.bbch is not None else no_data_value)
-                line.append(run.get_rainfall_intensity_value() if run.get_rainfall_intensity_value() is not None else no_data_value)
+                line.append(run.get_rainfall_intensity_value(6) if run.get_rainfall_intensity_value(6) is not None else no_data_value)
                 line.append(run.ttr)
 
+                # get best runoff, sediment concetration and rainfall data
                 runoff_record = run.get_best_runoff_record()
                 sed_conc_record = run.get_best_sediment_concentration_record()
+                rainfall_record = run.get_best_rainfall_record()
+
                 # if both records were found
-                if runoff_record is not None and sed_conc_record is not None:
+                if runoff_record is not None and sed_conc_record is not None and rainfall_record is not None:
                     # prepare column labels for dataframes
                     runoff_label = "runoff_rate"
-                    sed_conc_label = f"sediment_concentration"
-                    sed_flux_label = f"sediment_flux"
+                    discharge_label = "total_discharge"
+                    sed_conc_label = "sediment_concentration"
+                    sed_flux_label = "sediment_flux"
+                    sed_yield_label = "sediment_yield"
 
+                    rain_int_label = "rainfall_intensity"
+                    rain_tot_label = "rainfall_total"
+
+                    # get rainfall intensity data in mm.min^-1
+                    rainfall_data = run.get_rainfall_intensity_timeline(28, rain_int_label)
                     # get runoff data in [l.min-1]
                     runoff_data = runoff_record.get_data_in_unit(1, runoff_label)
                     # get the sediment concentration data in [g.l-1]
-                    sed_conc_data = sed_conc_record.get_data_in_unit(3, sed_conc_label)
+                    sediment_data = sed_conc_record.get_data_in_unit(3, sed_conc_label)
 
-                    # if both records have data
-                    if not runoff_data.empty and not sed_conc_data.empty:
+                    # if all needed dataframes are not empty
+                    if not runoff_data.empty and not sediment_data.empty and not rainfall_data.empty:
                         # data validity flag
                         invalid_data = []
 
+                        if not isinstance(rainfall_data.index, pd.TimedeltaIndex):
+                            invalid_data.append(f"rainfall record  {sed_conc_record.id} is not a timeline")
+                            invalid_record_ids.append(run.rain_intensity_recid)
+
                         if not isinstance(runoff_data.index, pd.TimedeltaIndex):
-                            print(
-                                f"\t\trunoff record {runoff_record.id} data index is not a TimeDeltaIndex!\n"
-                                f"\t\t - the record either has invalid value in `is_timeline` column\n"
-                                f"\t\t - or the record is not a runoff rate record and should have different unit.\n"
-                                f"\t\tAssign correct unit to the record or repair record DB entry if unit is correct by:\n"
-                                f"\t\tUPDATE `record` set `is_timeline = 1 WHERE `id` = {runoff_record.id}\n")
-                            # print(runoff_data)
                             invalid_data.append(f"runoff record {runoff_record.id} is not a timeline")
                             invalid_record_ids.append(runoff_record.id)
-                        if not isinstance(sed_conc_data.index, pd.TimedeltaIndex):
-                            print(
-                                f"\t\trunoff record {sed_conc_record.id} data index is not a TimeDeltaIndex!\n"
-                                f"\t\t - the record either has invalid value in `is_timeline` column\n"
-                                f"\t\t - or the record is not a runoff rate record and should have different unit.\n"
-                                f"\t\tAssign correct unit to the record or repair record DB entry if unit is correct by:\n"
-                                f"\t\tUPDATE `record` set `is_timeline = 1 WHERE `id` = {sed_conc_record.id}\n")
-                            print(sed_conc_data)
 
+                        if not isinstance(sediment_data.index, pd.TimedeltaIndex):
                             invalid_data.append(f"sediment concentration record  {sed_conc_record.id} is not a timeline")
                             invalid_record_ids.append(sed_conc_record.id)
 
@@ -292,17 +314,17 @@ class Miner:
                             if interpolate_zero_time:
                                 # a common zero time is added (if possible) to force the integration from very start
                                 # and to allow for cross-interpolation if the sediment series starts later than the runoff series
-                                t0 = get_zero_timestamp(runoff_data, runoff_label)
+                                t0 = get_zero_time(runoff_data, runoff_label)
                                 if t0:
                                     runoff_data.loc[pd.Timedelta(t0)] = 0
                                     runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
                                     runoff_data.sort_index()
                                     # if the zero time from runoff series is before the first value of sediment series (should be)
-                                    if t0 < sed_conc_data.index[0]:
+                                    if t0 < sediment_data.index[0]:
                                         # New row to add
-                                        sed_conc_data.loc[pd.Timedelta(t0)] = 0
+                                        sediment_data.loc[pd.Timedelta(t0)] = 0
                                         sediment_data = pd.concat(
-                                            [sed_conc_data.tail(1), sed_conc_data.head(len(sed_conc_data) - 1)])
+                                            [sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
                                         sediment_data.sort_index()
                                 else:  # assign the runoff start time as t0
                                     t0 = run.ttr
@@ -310,24 +332,33 @@ class Miner:
                             # print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
                             # print(f"sediment data (record #{sed_conc_record.id}):\n{sed_conc_data}\n")
 
-                            # merge the two dataframes into one with common 'time' index
-                            merged_data = pd.concat([runoff_data, sed_conc_data], axis=1, join='outer')
+                            # integrate rainfall data stepwise to [mm]
+                            integrate_data_series(rainfall_data, rain_int_label, rain_tot_label,
+                                                                  interpolate=False, time_unit='minutes')
+                            # integrate runoff data linearly to [l]
+                            integrate_data_series(runoff_data, runoff_label, discharge_label, interpolate=True, time_unit='minutes')
+
+                            # merge the dataframes into one with common 'time' index
+                            merged_data = pd.concat([runoff_data, sediment_data, rainfall_data], axis=1, join='outer')
                             # re-order the rows by time
                             try:
                                 merged_data.sort_index(inplace=True)
                             except TypeError as e:
                                 print(
-                                    f"Incompatible indexes in input dataframes - runoff or sediment record is not a timeline")
+                                    f"Incompatible indexes in input dataframes - one of input dataframes is not a timeline")
 
-                            # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
+                            # cross-interpolate if the timepoints are not the same in the series' and some values are missing
                             merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
                             merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
+                            merged_data[rain_tot_label] = merged_data[rain_tot_label].interpolate(method='linear')
                             # replace possible NaN at the very beginning of time series with 0
                             # (situation when runoff has started but no sediment concentration data are available yet)
                             merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
                             # calculate the sediment flux [g.min-1]
                             merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
-                            # print(f"runoff + sediment concentration + sediment flux:\n{merged_data}\n\n")
+                            # print(f"runoff + sediment concentration rainfall + sediment flux:\n{merged_data}\n\n")
+                            # integrate sediment flux to get total sediment yield in [g]
+                            integrate_data_series(merged_data, sed_flux_label, sed_yield_label, interpolate=True, time_unit='minutes')
 
                             i = 1
                             prev_index = None
@@ -345,9 +376,16 @@ class Miner:
                                 line_int.append(int_dur)
                                 line_int.append(t1)
                                 line_int.append(t2)
+                                line_int.append(row[rain_tot_label])
                                 line_int.append(row[runoff_label])
+                                line_int.append((row[discharge_label]))
                                 line_int.append(row[sed_conc_label])
                                 line_int.append(row[sed_flux_label])
+                                line_int.append(row[sed_yield_label])
+                                line_int.append(runoff_record.record_type.name[lang])
+                                line_int.append(runoff_record.quality_index.name[lang] if runoff_record.quality_index is not None else no_data_value)
+                                line_int.append(sed_conc_record.record_type.name[lang])
+                                line_int.append(sed_conc_record.quality_index.name[lang] if sed_conc_record.quality_index is not None else no_data_value)
                                 prev_index = index
                                 i += 1
                                 # print(line_int)
@@ -758,7 +796,8 @@ class Miner:
                 if run.rain_intensity_recid is not None:
                     intensity_rec = rdb.load_record(run.rain_intensity_recid)
                     intensity_data = intensity_rec.load_data("rain_intensity")
-                    rainfall_mm = round(integrate_series(intensity_data, "rain_intensity", interpolate=False, time_unit='hours'), 0)
+                    # get the total by integrating the intensity timeline
+                    rainfall_mm = round(integrate_by_time(intensity_data, "rain_intensity", interpolate=False, time_unit='hours'), 0)
 
                     line.append(rainfall_mm)
                     if intensity_rec.record_type_id in [7, 8]:
@@ -812,8 +851,8 @@ class Miner:
                             # if runoff dataframe has some data
                             if not runoff_data.empty:
                                 try:
-                                    runoff_l = integrate_series_minutes(runoff_data, runoff_label,
-                                                                        zero_time=get_zero_timestamp(runoff_data, runoff_label))
+                                    runoff_l = integrate_by_minutes(runoff_data, runoff_label,
+                                                                        zero_time=get_zero_time(runoff_data, runoff_label))
                                     runoff_mm = runoff_l/plot_area
                                 except ValueError as e:
                                     catchThem.append(runoff_record.id)
@@ -855,7 +894,7 @@ class Miner:
                         # if sediment data exist break the search cycle
                         if sediment_data is not None:
                             try:
-                                get_zero_timestamp(sediment_data, sed_conc_label)
+                                get_zero_time(sediment_data, sed_conc_label)
                             except ValueError as e:
                                 catchThem.append(ss_record.id)
                                 print(
@@ -873,7 +912,7 @@ class Miner:
                     if not runoff_data.empty and not sediment_data.empty:
                         # a common zero time is added (if possible) to force the integration from very start
                         # and to allow for cross-interpolation if the sediment series starts later than the runoff series
-                        t0 = get_zero_timestamp(runoff_data, runoff_label)
+                        t0 = get_zero_time(runoff_data, runoff_label)
                         if t0:
                             runoff_data.loc[pd.Timedelta(t0)] = 0
                             runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
@@ -909,7 +948,7 @@ class Miner:
                         merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
                         # write the cumulative values at the end of series
                         try:
-                            soilloss_g = integrate_series_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
+                            soilloss_g = integrate_by_minutes(merged_data, sed_flux_label, zero_time=t0, extrapolate=1)
                         except ValueError as e:
                             print(f"Integration by time failed on soil loss calculation - data frame index is not TimeDelta")
                             soilloss_Mg_ha = "NA"
@@ -1109,7 +1148,7 @@ class Miner:
 
                         # a common zero time is added (if possible) to force the integration from very start
                         # and to allow for cross-interpolation if the sediment series starts later than the runoff series
-                        t0 = get_zero_timestamp(runoff_data)
+                        t0 = get_zero_time(runoff_data)
                         if t0:
                             runoff_data.loc[pd.Timedelta(t0)] = 0
                             runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
@@ -1151,21 +1190,21 @@ class Miner:
                         print(f"merged data with total runoff and sediment:\n{merged_data}\n")
 
                         # write the cumulative values in desired times
-                        line.append(integrate_series_minutes(merged_data, t0, pd.Timedelta(minutes=10), runoff_label, zero_time=t0, extrapolate=2))
-                        line.append(integrate_series_minutes(merged_data, t0, pd.Timedelta(minutes=10), sed_flux_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=10), runoff_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=10), sed_flux_label, zero_time=t0, extrapolate=2))
 
-                        line.append(integrate_series_minutes(merged_data, t0, pd.Timedelta(minutes=20), runoff_label, zero_time=t0, extrapolate=2))
-                        line.append(integrate_series_minutes(merged_data, t0, pd.Timedelta(minutes=20), sed_flux_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=20), runoff_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=20), sed_flux_label, zero_time=t0, extrapolate=2))
 
-                        line.append(integrate_series_minutes(merged_data, t0, pd.Timedelta(minutes=30), runoff_label, zero_time=t0, extrapolate=2))
-                        line.append(integrate_series_minutes(merged_data, t0, pd.Timedelta(minutes=30), sed_flux_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=30), runoff_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=30), sed_flux_label, zero_time=t0, extrapolate=2))
 
                         # write the row to output
                         writeRowToCSV(output_csv, line)
 
                         if plots_dir:
                             plot_series_to_file(merged_data, [runoff_label, tot_runoff_label], os.path.join(plots_dir, f"{run.id}_runoff"), run_title, "time [min]", ["runoff rate [l.min-1]", "total runoff [l]"], True)
-                            merged_data.index = merged_data.index.map(lambda x: format_timedelta_index(x))
+                            merged_data.index = merged_data.index.map(lambda x: format_timedelta_hms(x))
                             merged_data.to_csv(os.path.join(plots_dir, f"{run.id}_runoff_sediment.csv"), sep=celld, decimal= ",")
 
                     else:
@@ -1244,7 +1283,7 @@ def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_
 
     return output_df
 
-def get_zero_timestamp(dataframe, series_name):
+def get_zero_time(dataframe, series_name):
     """
     Finds the point in time when the dataframe intersects the x-axis (searches for timestamp where value == 0)
 
@@ -1276,10 +1315,10 @@ def get_zero_timestamp(dataframe, series_name):
         print ("Zero time value couldn't be extrapolated because the timeline doesn't have enough datapoints.\n")
         return None
 
-def integrate_series_minutes(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True):
-    return integrate_series(df, series_name, start_time, end_time, zero_time, extrapolate, interpolate, 'minutes')
+def integrate_by_minutes(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True):
+    return integrate_by_time(df, series_name, start_time, end_time, zero_time, extrapolate, interpolate, 'minutes')
 
-def integrate_series(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True, time_unit='minutes'):
+def integrate_by_time(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True, time_unit='minutes'):
     """
     Calculate discrete time integral of selected 'series_name' from dataframe 'df' between 'start_time' and 'end_time'
     'zero_time' (if set) or first datapoint is used if start_time is None
@@ -1300,8 +1339,7 @@ def integrate_series(df, series_name, start_time = None, end_time = None, zero_t
 
     :returns: discrete time integral values.
     """
-    if series_name == "rain_intensiity":
-        print("integrating rain_intensiity")
+
     # ensure dataframe is time-indexed
     if not isinstance(df.index, pd.TimedeltaIndex):
         raise ValueError("DataFrame index must be of type TimedeltaIndex.")
@@ -1357,13 +1395,15 @@ def integrate_series(df, series_name, start_time = None, end_time = None, zero_t
 
     return output_value
 
-def integrate_data_series(df, series_name_in, series_name_out):
+def integrate_data_series(df, series_name_in, series_name_out, interpolate=True, time_unit='minutes'):
     """
     Calculates discreet integral for all points of given 'series_name_in' from dataframe 'df' and stores the values in new series 'series_name_out'
 
     :param df:
-    :param series_name_in:
-    :param series_name_out:
+    :param series_name_in: column name to process
+    :param series_name_out: column name for the output integrated series
+    :param interpolate: whether to interpolate between points in time series, if False stepwise integration is performed (value considered constant in each time interval)
+    :param time_unit: unit of time to use for integration ('minutes', 'hours', 'seconds')
     :return:
     """
     # Ensure dataframe is time-indexed
@@ -1373,7 +1413,7 @@ def integrate_data_series(df, series_name_in, series_name_out):
     output_values = []
 
     for time in df.index:
-        integral_value = integrate_series_minutes(df, pd.Timedelta(seconds=0), time, series_name_in)
+        integral_value = integrate_by_time(df, series_name_in,  pd.Timedelta(seconds=0), time, interpolate=interpolate, time_unit=time_unit)
 
         # Store the integrated value
         output_values.append(integral_value)
@@ -1387,7 +1427,7 @@ def get_value_in_time(df, timedelta, series_name, zero_time=None, extrapolate=No
     Returns interpolated value of dataseries in time specified as timedelta
 
     :param timedelta:
-    :param series_name: column index name of the series to be interpolated
+    :param series_name: column name of the series to be interpolated
     :param zero_time: presumed time of start of the series (value = 0)
     :param extrapolate: range of extrapolation specified as multiplication of last complete interval length
     :returns: interpolated/extrapolated value if available based on specified inputs otherwise False
@@ -1540,15 +1580,11 @@ def plot_series_to_file(df, series_names, file_path, title=None, xlabel = None, 
     # Save the plot to a PNG file
     plt.savefig(file_path)
 
-def format_timedelta_index(td, **kwargs):
+def format_timedelta_hms(td, **kwargs):
     return str(td).split(' ')[2]
 
-def format_timedelta_hms(timedelta):
-    total_seconds = timedelta.total_seconds()
-    hours = int(total_seconds / 3600)
-    minutes = int((total_seconds % 3600) / 60)
-    seconds = total_seconds % 60
-    return f"{hours:02}:{minutes:02}:{seconds:02}"
+def get_timedelta_s(timedelta):
+    return timedelta.total_seconds()
 
 def format_timedelta_min(timedelta):
     total_seconds = timedelta.total_seconds()

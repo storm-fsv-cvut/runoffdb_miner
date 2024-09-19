@@ -11,7 +11,13 @@ from pint import UnitRegistry
 from src.db_access import DBconnector
 
 # multipliers for different units to convert between each other
-multipliers = {1: {1: 1}, 2: {2: 1, 3: 0.001}, 3: {2: 1000, 3: 1}, 18: {27: 0.001}, 27: {18: 1000}}
+multipliers = {1: {1: 1},
+               2: {2: 1, 3: 0.001},
+               3: {2: 1000, 3: 1},
+               6: {6: 1, 28: 1/60},
+               18: {18: 1, 27: 0.001},
+               27: {18: 1000, 27: 1},
+               28: {6: 60, 28: 1}}
 
 
 def remove_last_zero_row(df):
@@ -332,7 +338,7 @@ class RunoffDB:
                 for r in results:
                     new = OperationIntensity(**r)
                     op_ints.update({new.id: new})
-                print(f"operation types successfully loaded")
+                print(f"operation intensities successfully loaded")
             thecursor.close()
         return op_ints
 
@@ -407,20 +413,6 @@ class RunoffDB:
             thecursor.close()
         return agrotechnologies
 
-    def load_record(self, record_id):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # start of the query
-            query = f"SELECT * FROM {self.records_table} WHERE `id` = {record_id}"
-            # execute the query and fetch the results
-            thecursor.execute(query)
-
-            results = thecursor.fetchone()
-            thecursor.close()
-            if len(results) > 0:
-                return Record(self, **results)
-
-        return None
-
     def load_phenomena(self):
         with self.dbcon.cursor(dictionary=True) as thecursor:
             query = f"SELECT * FROM {self.phenomena_table}"
@@ -472,7 +464,10 @@ class RunoffDB:
     def load_record_by_id(self, record_id):
         with self.dbcon.cursor(dictionary=True)as thecursor:
             # start of the query
-            query = f"SELECT * FROM {self.records_table} WHERE `id` = {record_id}"
+            query = f"SELECT {self.records_table}.*, {self.measurements_table}.`phenomenon_id` AS phenomenon_id " \
+                    f"FROM {self.records_table} " \
+                    f"JOIN {self.measurements_table} ON {self.measurements_table}.`id` = {self.records_table}.`measurement_id` " \
+                    f"WHERE {self.records_table}.`id` = {record_id}"
             # execute the query and fetch the results
             thecursor.execute(query)
             results = thecursor.fetchone()
@@ -680,7 +675,7 @@ class Run:
         """
         # first check if the surface cover record is assigned to run
         if self.surface_cover_recid:
-            surface_cover_rec = self.runoffdb.load_record(self.surface_cover_recid)
+            surface_cover_rec = self.runoffdb.load_record_by_id(self.surface_cover_recid)
             surface_cover_rec.load_data("surface_cover")
             surface_cover_data = surface_cover_rec.get_data("surface_cover")
 
@@ -701,44 +696,31 @@ class Run:
             print(f"\trun #{self.id} doesn't have surface cover record ID assigned.")
             return self.runoffdb.na_value
 
-    def get_rainfall_intensity_timeline(self):
-        if self.rain_intensity_recid:
-            intensity_rec = self.load_record(self.rain_intensity_recid)
-            intensity_data = intensity_rec.load_data("rain_intensity")
-            # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
-            if len(intensity_data.index) == 1:
-                print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
-                return None
-            elif len(intensity_data.index) == 2:
-                if intensity_data["rain_intensity"].iloc[-1] != 0:
-                    print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} doesn't end with zero value!")
-                    return None
-                return intensity_data["rain_intensity"].iloc[0]
-            else:
-                # interrupted or variable intensity rainfall
-                numzeros = 0
-                for datapoint in intensity_data:
-                    if datapoint[0] == 0:
-                        numzeros += 1
-                if numzeros > 1:
-                    return "interrupted"
-                else:
-                    return "variable"
-        else:
-            print(f"run {self.id} doesn't have rainfall intensity record ID assigned.")
-            return None
-
-    def get_rainfall_intensity_value(self):
-        if self.rain_intensity_recid:
+    def get_rainfall_intensity_timeline(self, target_unit_id=None, series_label="rain_intensity"):
+        if self.rain_intensity_recid is not None:
             intensity_rec = self.runoffdb.load_record_by_id(self.rain_intensity_recid)
-            intensity_data = intensity_rec.load_data("rain_intensity")
+            intensity_data = intensity_rec.get_data_in_unit(target_unit_id, series_label)
             # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
             if len(intensity_data.index) == 1:
                 print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
                 return None
+            else:
+                return intensity_data
+
+        else:
+            print(f"\trun #{self.id} doesn't have rainfall intensity record ID assigned.")
+            return None
+
+    def get_rainfall_intensity_value(self, target_unit_id = None):
+        intensity_data = self.get_rainfall_intensity_timeline(target_unit_id, "rain_intensity")
+        if intensity_data is not None:
+            # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
+            if len(intensity_data.index) == 1:
+                print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
+                return None
             elif len(intensity_data.index) == 2:
                 if intensity_data["rain_intensity"].iloc[-1] != 0:
-                    print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} doesn't end with zero value!")
+                    print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} doesn't end with zero value!")
                     return None
                 return intensity_data["rain_intensity"].iloc[0]
             else:
@@ -752,69 +734,51 @@ class Run:
                 else:
                     return "variable"
         else:
-            print(f"\trun {self.id} doesn't have rainfall intensity record ID assigned.")
             return None
 
-    def get_best_runoff_record(self, view_order=None):
+
+    def get_total_rainfall(self):
+        raise NotImplementedError("Run object method 'get_total_rainfall()' is not implemented yet")
+
+    def get_best_record_of_unit(self, phenomenon_id, unit_id, view_order=None):
         # use the default view order if not specified
         view_order = view_order if view_order is not None else self.runoffdb.default_view_order
-        # search for surface runoff rate record
+        # search for records of unit
         # go through the record type priority list and find the first matching Record
         for record_type in view_order:
             # ignore "missing record" type
             if record_type != 99:
-                # get the best surface runoff measurement Record
-                found_records = self.get_records(1, 1, record_type)
+                # get records of current type
+                found_records = self.get_records(phenomenon_id, unit_id, record_type)
                 if found_records is not None:
-                    for qi in self.runoffdb.get_all_quality_indexes()+[None]:
+                    for qi in self.runoffdb.get_all_quality_indexes() + [None]:
                         # list records of this quality
                         rq = []
                         for rec in found_records:
                             if rec.quality_index_id == qi:
-                                print(f"\trunoff rate record of unit {rec.unit_id}, type {record_type} and quality index {qi} found: {rec.id}")
+                                print(
+                                    f"\t{rec.unit.name['en']} record of {rec.phenomenon.name['en']}, type '{rec.record_type.name['en']}' and quality index {qi} found: {rec.id}")
                                 rq.append(rec)
                         # as soon as any record is found return it
                         if len(rq) > 0:
                             if len(rq) > 1:
-                                print(f"\tMultiple runoff records of type {record_type} and quality index {qi} were found for run #{self.id}:\n"
-                                      f"{', '.join([str(r.id) for r in rq])}"
-                                      f"\tFirst of them will be used for processing (record id {rq[0].id}).")
+                                print(
+                                    f"\tMultiple records of type {rec.record_type.name['en']} and quality index {qi} were found for run #{self.id}:\n"
+                                    f"{', '.join([str(r.id) for r in rq])}"
+                                    f"\tFirst of them will be used for processing (record id {rq[0].id}).")
                             return rq[0]
 
-        print(f"\trun #{self.id} has no runoff measurement records.")
+        print(f"\trun #{self.id} has no records of phenomenon id {phenomenon_id} and unit id {unit_id}.")
         return None
 
-    def get_best_sediment_concentration_record(self, view_order=None):
-        # use the default view order if not specified
-        view_order = view_order if view_order is not None else self.runoffdb.default_view_order
-        # search for sediment concentration record
-        # go through the record type priority list and find the first matching Record
-        for record_type in view_order:
-            # ignore "missing record" type
-            if record_type != 99:
-                # get the best sediment concentration measurement Record
-                found_records = self.get_records(2, [2, 3], record_type_id=record_type)
-                if found_records is not None:
-                    for qi in self.runoffdb.get_all_quality_indexes()+[None]:
-                        # records of this quality
-                        rq = []
-                        for rec in found_records:
-                            if rec.quality_index_id == qi:
-                                print(f"\tsediment concentration record of unit {rec.unit_id}, type {record_type} and quality index {qi} found: {rec.id}")
-                                rq.append(rec)
-                        # as soon as any record is found return it
-                        if len(rq) > 0:
-                            if len(rq) > 1:
-                                print(f"\tMultiple sediment concentration records of type {record_type} and quality index {qi} were found for run #{self.id}:\n"
-                                      f"{', '.join([str(r.id) for r in rq])}"
-                                      f"\tFirst of them will be used for processing (record id {rq[0].id}).")
-                            return rq[0]
+    def get_best_rainfall_record(self, view_order=None):
+        if self.rain_intensity_recid is not None:
+            return self.runoffdb.load_record_by_id(self.rain_intensity_recid)
+        else:
+            return self.get_best_record_of_unit(3, [6,28], view_order)
 
-        print(f"\trun #{self.id} has no sediment concentration measurement records.")
-        return None
-
-    def get_total_rainfall(self):
-        raise NotImplementedError("Run object method 'get_total_rainfall()' is not implemented yet")
+    def get_best_runoff_record(self, view_order=None):
+        return self.get_best_record_of_unit(1, 1, view_order)
 
     def get_best_runoff_value_l(self):
         raise NotImplementedError("Run object method 'get_best_runoff_value_l()' is not implemented yet")
@@ -822,13 +786,16 @@ class Run:
     def get_best_runoff_value_mm(self):
         raise NotImplementedError("Run object method 'get_best_runoff_value_mm()' is not implemented yet")
 
+    def get_best_sediment_concentration_record(self, view_order=None):
+        return self.get_best_record_of_unit(2, [2, 3], view_order)
+
     def get_best_sediment_yield_value_g(self):
         raise NotImplementedError("Run object method 'get_best_sediment_yield_value_g()' is not implemented yet")
 
     def get_best_sediment_yield_value_tha(self):
         raise NotImplementedError("Run object method 'get_best_sediment_yield_value_tha()' is not implemented yet")
 
-    def get_records(self, phenomenon_id = None, unit_id = None, record_type_id = None):
+    def get_records(self, phenomenon_id=None, unit_id=None, record_type_id=None):
         out = []
         # get the measurements related to Run instance, pass on the argument
         measurements = self.get_measurements(phenomenon_id)
@@ -1011,7 +978,10 @@ class Measurement:
 
     def load_records(self):
         with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {RunoffDB.records_table} WHERE `measurement_id` = {self.id}"
+            query = f"SELECT {self.runoffdb.records_table}.*, {self.runoffdb.measurements_table}.`phenomenon_id` AS phenomenon_id " \
+                    f"FROM {self.runoffdb.records_table} " \
+                    f"JOIN {self.runoffdb.measurements_table} ON {self.runoffdb.measurements_table}.`id` = {self.runoffdb.records_table}.`measurement_id` " \
+                    f"WHERE `measurement_id` = {self.id}"
             # print(query)
             thecursor.execute(query)
             results = thecursor.fetchall()
@@ -1094,10 +1064,11 @@ class Record:
         self.id = kwargs.get("id")
         self.measurement_id = kwargs.get("measurement_id")
         self.record_type_id = kwargs.get("record_type_id")
+        self.record_type = self.runoffdb.record_types[self.record_type_id]
         self.unit_id = kwargs.get("unit_id")
         self.unit = self.runoffdb.units[self.unit_id]
-        self.note_cz = kwargs.get("note_cz")
-        self.note_en = kwargs.get("note_en")
+        self.phenomenon_id = kwargs.get("phenomenon_id")
+        self.phenomenon = self.runoffdb.phenomena[self.phenomenon_id]
         self.related_value_x_unit_id = kwargs.get("related_value_xunit_id")
         self.unit_rel_x = self.runoffdb.units[self.related_value_x_unit_id] if self.related_value_x_unit_id is not None else None
         self.related_value_y_unit_id = kwargs.get("related_value_yunit_id")
@@ -1107,6 +1078,9 @@ class Record:
         self.quality_index_id = kwargs.get("quality_index_id")
         self.quality_index = self.runoffdb.quality_index[self.quality_index_id ] if self.quality_index_id is not None else None
         self.is_timeline = kwargs.get("is_timeline")
+
+        self.note_cz = kwargs.get("note_cz")
+        self.note_en = kwargs.get("note_en")
         self.description_cz = kwargs.get("description_cz")
         self.description_en = kwargs.get("description_en")
 
@@ -1209,7 +1183,7 @@ class Record:
             else:
                 return None
 
-    def get_data_in_unit(self, target_unit_id, value_name, remove_last_zero=False, output_column_label=None):
+    def get_data_in_unit(self, target_unit_id, value_name="value", remove_last_zero=False, output_column_label=None):
         """
         Return self.data with 'value' multiplied by the unit's multiplier to SI (if there were any data loaded).
         Tries loading the data if self.data is None.
@@ -1219,6 +1193,9 @@ class Record:
         if self.get_data(value_name) is not None:
             # if not self.data.empty:
             if target_unit_id == self.unit_id:
+                return self.data
+            if target_unit_id is None:
+                print(f"Unit ID for data retrieval was not specified - returning in original unit: {self.unit_id} ({self.unit.unit})!")
                 return self.data
             output_column_label = output_column_label if output_column_label is not None else value_name
 
