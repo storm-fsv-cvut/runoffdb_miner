@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import time
+from datetime import timedelta
 import os
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -218,21 +218,25 @@ class Miner:
         :param log_file:
         :return:
         """
-        rdb = RunoffDB()
+        rdb = RunoffDB(log_file_path=log_file)
         # the runs may not be loaded yet ...
         if rdb.runs is None:
-            rdb.load_runs(date_from = date_from, date_to = date_to)
+            rdb.load_runs(date_from=date_from, date_to=date_to)
 
         if rdb.runs:
-            headers = {"cz": ["ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "délka plochy [m]",
-                            "šířka plochy [m]", "sklon plochy [%]", "ID simulátoru", "simulátor", "ID plodiny", "plodina", "počáteční stav",
-                            "počáteční vlhkost", "zakrytí povrchu [%]", "BBCH", "intenzita srážky [mm/h]",
+            headers = {"cz": ["ID sekvence", "ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "název plochy", "délka plochy [m]",
+                            "šířka plochy [m]", "sklon plochy [%]", "poznámky k ploše", "dnů od zasetí", "ochranné opatření", "ID simulátoru", "simulátor",
+                              "ID plodiny", "plodina", "stav plodiny", "výška plodiny [cm]", "počet rostlin [1/m2]", "BBCH",  "zakrytí povrchu [%]",
+                            "počáteční stav", "počáteční vlhkost","<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
+                              "objemová hmotnost [g/cm3]", "intenzita srážky [mm/h]",
                               "TTR", "interval", "délka intervalu", "t1", "t2", "srážkový úhrn [mm]",
                               "průtok [l/min]", "celkový odtok [l]", "koncentrace sedimentu [g/l]", "tok sedimentu[g/min]",
                               "ztráta půdy [g]"],
-                     "en": ["run ID", "locality ID", "locality", "date", "plot ID", "plot length [m]",
-                            "plot width [m]", "plot slope [%]","simulator ID", "simulator", "crop ID", "crop", "initial cond.",
-                            "init. moisture", "surface cover [%]", "BBCH", "rain intensity [mm.h-1]",
+                     "en": ["sequence ID", "run ID", "locality ID", "locality", "date", "plot ID", "plot name", "plot length [m]",
+                            "plot width [m]", "plot slope [%]", "plot notes", "days since seeding", "soil protection measure",
+                            "simulator ID", "simulator", "crop ID", "crop", "crop condition", "BBCH",  "surface cover [%]",
+                            "initial cond.", "init. moisture","<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
+                            "bulk density [g.cm-3]", "rain intensity [mm.h-1]",
                             "time to runoff", "interval #", "interval duration", "t1", "t2", "rainfall total [mm]",
                             "flow rate [l.min-1]", "total discharge [l]", "SS concentration [g.l-1]", "SS flux [g.min-1]",
                             "sediment yield[g]"]}
@@ -247,29 +251,58 @@ class Miner:
                 # one line represents one time interval of a measured time series within a run
                 line = []
 
-                print(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]}")
+                print(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}")
 
                 # gather all the info and values common for the whole simulation run ===================================
+                line.append(run.sequence_id)
                 line.append(run.id)
                 line.append(run.locality.id)
                 line.append(run.locality.name)
                 line.append(czech_date(run.datetime))
                 line.append(run.plot_id)
+                line.append(run.plot.name)
                 line.append(run.plot.plot_length)
                 line.append(run.plot.plot_width)
                 line.append(run.plot.plot_slope)
+                line.append(run.plot.note[lang] or no_data_value)
+                line.append(run.plot.days_since_seeding(run.datetime) or no_data_value)
+                line.append(run.plot.protection_measure.name[lang] if run.plot.protection_measure is not None else no_data_value)
                 line.append(run.simulator.id)
                 line.append(run.simulator.name[lang])
-                line.append(run.crop_id if run.crop_id is not None else no_data_value)
-                line.append(run.crop.name[lang] if run.crop.name[lang] is not None else no_data_value)
+                line.append(run.crop_id if run.crop_id else no_data_value)
+                line.append(run.crop.name[lang] if run.crop else no_data_value)
+                line.append(f"\"{run.crop_condition[lang]}\""  if run.crop else no_data_value)
+                line.append(run.get_crop_height_value() or no_data_value)
+                line.append(run.get_plant_density_value() or no_data_value)
+                line.append(run.bbch or no_data_value)
+                line.append(run.get_surface_cover_value() or no_data_value)
                 line.append(run.run_type.name[lang])
-                line.append(run.get_initial_moisture_value() if run.get_initial_moisture_value() is not None else no_data_value)
-                line.append(run.get_surface_cover_value() if run.get_surface_cover_value() is not None else no_data_value)
-                line.append(run.bbch if run.bbch is not None else no_data_value)
-                line.append(run.get_rainfall_intensity_value(6) if run.get_rainfall_intensity_value(6) is not None else no_data_value)
+                line.append(run.get_initial_moisture_value() or no_data_value)
+
+                texture_record = run.get_soil_texture_record()
+                if texture_record is not None:
+                    texture_data = texture_record.load_data("cumulative_mass_content", "particle_size", index_column="particle_size",
+                                             order_by="particle_size")
+                    if not texture_data.empty:
+                        # upper size limits for clay/silt/sand
+                        WRB_fraction_limits = [0.002, 0.063, 2]
+                        interpolated_texture = interpolate_texture(texture_data,
+                                                                   WRB_fraction_limits,
+                                                                   "cumulative_mass_content",
+                                                                    return_int=False, return_cumulative=False)
+                        line.append(interpolated_texture.loc[WRB_fraction_limits[0], 'cumulative_mass_content'])
+                        line.append(interpolated_texture.loc[WRB_fraction_limits[1], 'cumulative_mass_content'])
+                        line.append(interpolated_texture.loc[WRB_fraction_limits[2], 'cumulative_mass_content'])
+                    else:
+                        line.extend([no_data_value, no_data_value, no_data_value])
+                else:
+                    line.extend([no_data_value, no_data_value, no_data_value])
+
+                line.append(run.get_bulk_density_value(27) or no_data_value)
+                line.append(run.get_rainfall_intensity_value(6) or no_data_value)
                 line.append(run.ttr)
 
-                # get best runoff, sediment concetration and rainfall data
+                # get best runoff, sediment concentration and rainfall data
                 runoff_record = run.get_best_runoff_record()
                 sed_conc_record = run.get_best_sediment_concentration_record()
                 rainfall_record = run.get_best_rainfall_record()
@@ -287,13 +320,18 @@ class Miner:
                     rain_tot_label = "rainfall_total"
 
                     # get rainfall intensity data in mm.min^-1
-                    rainfall_data = run.get_rainfall_intensity_timeline(28, rain_int_label)
+                    rainfall_data = rainfall_record.get_data_in_unit(28, rain_int_label)
                     # get runoff data in [l.min-1]
                     runoff_data = runoff_record.get_data_in_unit(1, runoff_label)
                     # get the sediment concentration data in [g.l-1]
                     sediment_data = sed_conc_record.get_data_in_unit(3, sed_conc_label)
 
                     # if all needed dataframes are not empty
+                    try:
+                        not runoff_data.empty and not sediment_data.empty and not rainfall_data.empty
+                    except AttributeError as e:
+                        print(f"run {run.id} has record {rainfall_record.id} with no data.")
+
                     if not runoff_data.empty and not sediment_data.empty and not rainfall_data.empty:
                         # data validity flag
                         invalid_data = []
@@ -332,12 +370,6 @@ class Miner:
                             # print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
                             # print(f"sediment data (record #{sed_conc_record.id}):\n{sed_conc_data}\n")
 
-                            # integrate rainfall data stepwise to [mm]
-                            integrate_data_series(rainfall_data, rain_int_label, rain_tot_label,
-                                                                  interpolate=False, time_unit='minutes')
-                            # integrate runoff data linearly to [l]
-                            integrate_data_series(runoff_data, runoff_label, discharge_label, interpolate=True, time_unit='minutes')
-
                             # merge the dataframes into one with common 'time' index
                             merged_data = pd.concat([runoff_data, sediment_data, rainfall_data], axis=1, join='outer')
                             # re-order the rows by time
@@ -347,19 +379,34 @@ class Miner:
                                 print(
                                     f"Incompatible indexes in input dataframes - one of input dataframes is not a timeline")
 
-                            # cross-interpolate if the timepoints are not the same in the series' and some values are missing
+                            # Limit the index to end at the last time point of the runoff or sediment data
+                            end_time = min(merged_data[runoff_label].last_valid_index(),
+                                           merged_data[sed_conc_label].last_valid_index())
+                            merged_data = merged_data.loc[:end_time]
+
+                            # cross-interpolate for the runoff and sediment concentration values
                             merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
                             merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
-                            merged_data[rain_tot_label] = merged_data[rain_tot_label].interpolate(method='linear')
-                            # replace possible NaN at the very beginning of time series with 0
-                            # (situation when runoff has started but no sediment concentration data are available yet)
+
+                            # forward-fill the rainfall intensity data and fill any remaining sediment concentration gaps
+                            merged_data[rain_int_label] = merged_data[rain_int_label].ffill()
                             merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
                             # calculate the sediment flux [g.min-1]
                             merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
                             # print(f"runoff + sediment concentration rainfall + sediment flux:\n{merged_data}\n\n")
+                            # integrate rainfall data stepwise to [mm]
+                            integrate_data_series(merged_data, rain_int_label, rain_tot_label,
+                                                                  interpolate=False, time_unit='minutes')
+                            # integrate runoff data linearly to [l]
+                            integrate_data_series(merged_data, runoff_label, discharge_label, interpolate=True, time_unit='minutes')
+
                             # integrate sediment flux to get total sediment yield in [g]
                             integrate_data_series(merged_data, sed_flux_label, sed_yield_label, interpolate=True, time_unit='minutes')
 
+                            # print(merged_data[runoff_label])
+                            # print(merged_data[sed_conc_label])
+                            # print(merged_data[sed_flux_label])
+                            # print(merged_data[sed_yield_label])
                             i = 1
                             prev_index = None
                             for index, row in merged_data.iterrows():
@@ -382,10 +429,11 @@ class Miner:
                                 line_int.append(row[sed_conc_label])
                                 line_int.append(row[sed_flux_label])
                                 line_int.append(row[sed_yield_label])
-                                line_int.append(runoff_record.record_type.name[lang])
-                                line_int.append(runoff_record.quality_index.name[lang] if runoff_record.quality_index is not None else no_data_value)
-                                line_int.append(sed_conc_record.record_type.name[lang])
-                                line_int.append(sed_conc_record.quality_index.name[lang] if sed_conc_record.quality_index is not None else no_data_value)
+
+                                # line_int.append(runoff_record.record_type.name[lang])
+                                # line_int.append(runoff_record.quality_index.name[lang] if runoff_record.quality_index is not None else no_data_value)
+                                # line_int.append(sed_conc_record.record_type.name[lang])
+                                # line_int.append(sed_conc_record.quality_index.name[lang] if sed_conc_record.quality_index is not None else no_data_value)
                                 prev_index = index
                                 i += 1
                                 # print(line_int)
@@ -394,9 +442,314 @@ class Miner:
                             writeRowToCSV(output_csv, line + invalid_data)
 
             output_csv.close()
+            rdb.save_log()
+
             if len(invalid_record_ids) > 0:
                 print(f"\n\nUPDATE `record` set `is_timeline` = 1 WHERE `id` IN ({', '.join([str(rid) for rid in invalid_record_ids])})")
 
+        else:
+            print("No runs available within given limits.")
+
+        return
+
+
+    def generate_cumulative_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", logfile_path=None, plots_dir=None):
+        """
+
+        :param output_path: path of the output file
+        :param logfile_path:
+        :param plots_dir: directory path for plots
+        :return:
+        """
+        # create runoffDB connection instance
+        rdb = RunoffDB()
+        # the runs may not be loaded yet ...
+        if rdb.runs is None:
+            rdb.load_runs(date_from=date_from, date_to=date_to)
+
+        if rdb.runs:
+            velocities_filename = "velocities.csv"
+
+            cumulatives_headers1 = {"cz": ["lokalita", "simID", "datum", "plot ID", "simulator", "plodina", "typ_plodiny", "poc_stav",
+                                          "poc_vlhkost", "canopy_cover", "BBCH", "intenzita", "TTR",
+                                           "odtok_l", "ztrata_pudy_g", "odtok_l", "ztrata_pudy_g", "odtok_l", "ztrata_pudy_g",
+                                           "povrchova rychlost [m.s-1]"],
+                                    "en": ["locality", "run ID", "date", "plot ID", "simulator", "crop", "crop type", "initial cond.",
+                                           "init. moisture", "canopy cover", "BBCH", "rain intensity", "time to runoff",
+                                           "cum. discharge [l]", "cum. soil loss [g]", "cum. discharge [l]", "cum. soil loss [g]", "cum. discharge [l]", "cum. soil loss [g]",
+                                           "povrchova rychlost [m.s-1]"]}
+
+            cumulatives_headers2 = ["", "", "", "", "", "", "", "", "", "", "", "", "", "t1=10min", "", "t1=20min", "", "t1=30min"]
+
+            # open the file for writing, overwrite if exists, write file headers
+            output_csv = open(output_path, "w", encoding="utf-8")
+            writeRowToCSV(output_csv, cumulatives_headers2)
+            writeRowToCSV(output_csv, cumulatives_headers1[lang])
+
+            # just for the counter
+            i = 1
+            num_runs = len(rdb.runs)
+            for run in rdb.runs.values():
+                # show the counter
+                print(f"{i}/{num_runs}")
+                i += 1
+
+                run_title = f"#{run.id} - {czech_date(run.datetime)} - {rdb.localities[run.locality_id]['name']} - {run.get_crop_name(lang)} [{run.plot_id}], {rdb.run_types[run.run_type_id]} {{{run.ttr}}}"
+                print(run_title)
+                # run.show_details()
+
+                # one row to be filled and written to the output files
+                line = []
+
+                # get best runoff, sediment concentration and rainfall data
+                runoff_record = run.get_best_runoff_record()
+                sed_conc_record = run.get_best_sediment_concentration_record()
+                rainfall_record = run.get_best_rainfall_record()
+
+                # if both records were found
+                if runoff_record is not None and sed_conc_record is not None and rainfall_record is not None:
+                # search for the surface flow velocity records
+                    run.get_terminal_velocity_value()
+
+                # if both data are found
+                if runoff_data is not None and sediment_data is not None:
+                    # if both dataframes have some data
+                    if not runoff_data.empty and not sediment_data.empty:
+                        # check if the directory exists and if not create it
+                        if plots_dir:
+                            # check if the directory exists and if not create it
+                            if not os.path.isdir(plots_dir):
+                                os.mkdir(plots_dir)
+                        # gather all the info and values ========================================
+                        line.append(run.locality.name)
+                        line.append(run.id)
+                        line.append(czech_date(run.datetime))
+                        line.append(run.plot_id)
+                        line.append(run.simulator.id)
+                        line.append(run.crop.name[lang] or no_data_value)
+                        line.append(run.crop.crop_type.name[lang] or no_data_value)
+                        line.append(run.run_type.name[lang])
+                        line.append(run.get_initial_moisture_value() or no_data_value)
+                        line.append(run.get_surface_cover_value() or no_data_value)
+                        line.append(run.bbch or no_data_value)
+                        line.append(run.get_rainfall_intensity() or no_data_value)
+                        line.append(run.ttr)
+
+
+                        runoff_label = f"runoff [{rdb.units.get(runoff_record.unit_id).unit}]"
+                        sed_conc_label = f"sed. conc. [{rdb.units.get(3).unit}]"
+                        sed_flux_label = f"sed. flux [{rdb.units.get(25).unit}]"
+                        tot_runoff_label = "total runoff"
+                        sed_mass_label = "sediment mass"
+
+                        # a common zero time is added (if possible) to force the integration from very start
+                        # and to allow for cross-interpolation if the sediment series starts later than the runoff series
+                        t0 = get_zero_time(runoff_data)
+                        if t0:
+                            runoff_data.loc[pd.Timedelta(t0)] = 0
+                            runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
+                            runoff_data.sort_index()
+                            # if the zero time from runoff series is before the first value of sediment series (should be)
+                            if t0 < sediment_data.index[0]:
+                                # New row to add
+                                sediment_data.loc[pd.Timedelta(t0)] = 0
+                                sediment_data = pd.concat([sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
+                                sediment_data.sort_index()
+                        else: # assign the runoff start time as t0
+                            t0 = run.ttr
+                        # print(f"runoff data:\n{runoff_data}\n")
+                        # print(f"sediment data:\n{sediment_data}\n\n")
+
+                        # merge the two dataframes into one with common 'time' index
+                        merged_data = pd.concat([runoff_data, sediment_data], axis=1, join='outer', keys=[runoff_label, sed_conc_label])
+                        # re-order the rows by time
+                        merged_data.reset_index(inplace=True)
+                        merged_data['time'] = pd.to_timedelta(merged_data['time'])
+                        merged_data.sort_values(by='time', inplace=True)
+                        # set the time index back
+                        merged_data.set_index('time', inplace=True)
+
+                        # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
+                        merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
+                        merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
+                        # replace possible NaN at the very beginning of time series with 0
+                        # (situation when runoff has started but no sediment concentration data are available yet)
+                        merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
+
+                        # calculate the sediment flux [g.min-1]
+                        merged_data[(sed_flux_label, '[g.min-1]')] = merged_data[runoff_label] * merged_data[sed_conc_label]
+
+                        # calculate cumulative runoff series
+                        integrate_data_series(merged_data, runoff_label, (tot_runoff_label, '[l]'))
+                        # calculate cumulative sediment flux series
+                        integrate_data_series(merged_data, sed_flux_label, (sed_mass_label, '[g]'))
+                        print(f"merged data with total runoff and sediment:\n{merged_data}\n")
+
+                        # write the cumulative values in desired times
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=10), runoff_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=10), sed_flux_label, zero_time=t0, extrapolate=2))
+
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=20), runoff_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=20), sed_flux_label, zero_time=t0, extrapolate=2))
+
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=30), runoff_label, zero_time=t0, extrapolate=2))
+                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=30), sed_flux_label, zero_time=t0, extrapolate=2))
+
+                        # write the row to output
+                        writeRowToCSV(output_csv, line)
+
+                        if plots_dir:
+                            plot_series_to_file(merged_data, [runoff_label, tot_runoff_label], os.path.join(plots_dir, f"{run.id}_runoff"), run_title, "time [min]", ["runoff rate [l.min-1]", "total runoff [l]"], True)
+                            merged_data.index = merged_data.index.map(lambda x: format_timedelta_hms(x))
+                            merged_data.to_csv(os.path.join(plots_dir, f"{run.id}_runoff_sediment.csv"), sep=celld, decimal= ",")
+
+                    else:
+                        print(f"One or both data series of run {run.id} is empty!\n"
+                              f"... which really shouldn't happen as the Record.get_data() returns None when the Record.data is empty dataframe ...")
+
+            # close the files if were opened
+            output_csv.close()
+        else:
+            print("No runs available within given limits.")
+
+        return
+    def generate_soilpulse_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", logfile_path=None):
+        """
+
+        :param output_path: path of the output file
+        :param logfile_path:
+        :param plots_dir: directory path for plots
+        :return:
+        """
+        # create runoffDB connection instance
+        rdb = RunoffDB(logfile_path)
+        # the runs may not be loaded yet ...
+        if rdb.runs is None:
+            rdb.load_runs(date_from=date_from, date_to=date_to, localities=[1, 8])
+
+        if rdb.runs:
+            velocities_filename = "velocities.csv"
+
+            headers = {"cz": ["lokalita", "lat", "long", "simID", "datum", "plot ID", "simulator", "plodina", "typ_plodiny", "poc_stav",
+                              "poc_vlhkost", "canopy_cover", "BBCH", "intenzita_srazky_mm_h-1", "TTR", "objemova_hmotnost_g_cm-3",
+                               "celkovy_cas_s", "srazkovy_uhrn_mm", "celkovy_odtok_l", "celkova_ztrata_pudy_g"],
+                        "en": ["locality", "latitude", "longitude", "run ID", "date", "plot ID", "simulator", "crop", "crop type", "initial cond.",
+                               "init. moisture", "canopy cover", "BBCH", "rain intensity [mm.h^-1]", "time to runoff", "bulk density [g.cm^-3]",
+                                   "total time [s]", "total rainfall [mm]", "total discharge [l]", "total soil loss [g]"]}
+
+            # open the file for writing, overwrite if exists, write file headers
+            output_csv = open(output_path, "w", encoding="utf-8")
+            writeRowToCSV(output_csv, headers[lang])
+
+            # just for the counter
+            i = 1
+            num_runs = len(rdb.runs)
+            for run in rdb.runs.values():
+                # show the counter
+                print(f"{i}/{num_runs}")
+                i += 1
+
+                run_title = f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} [{run.plot_id}], {run.run_type.name[lang]} {{{run.ttr}}}"
+                print(run_title)
+                # run.show_details()
+
+                # one row to be filled and written to the output files
+                line = []
+
+                # get best runoff, sediment concentration and rainfall data
+                runoff_record = run.get_best_runoff_record()
+                sed_conc_record = run.get_best_sediment_concentration_record()
+                rainfall_record = run.get_best_rainfall_record()
+
+                # if all necessary records were found
+                if runoff_record is not None and sed_conc_record is not None and rainfall_record is not None:
+                    # prepare column labels for dataframes
+                    runoff_label = "runoff_rate"
+                    discharge_label = "total_discharge"
+                    sed_conc_label = "sediment_concentration"
+                    sed_flux_label = "sediment_flux"
+                    sed_yield_label = "sediment_yield"
+
+                    rain_int_label = "rainfall_intensity"
+                    rain_tot_label = "rainfall_total"
+
+                    # get rainfall intensity data in mm.min^-1
+                    rainfall_data = rainfall_record.get_data_in_unit(28, rain_int_label)
+                    # get runoff data in [l.min-1]
+                    runoff_data = runoff_record.get_data_in_unit(1, runoff_label)
+                    # get the sediment concentration data in [g.l-1]
+                    sediment_data = sed_conc_record.get_data_in_unit(3, sed_conc_label)
+
+                    # if all needed dataframes are not empty
+                    if not runoff_data.empty and not sediment_data.empty and not rainfall_data.empty:
+                        line.append(run.locality.name)
+                        line.append(run.locality.lat)
+                        line.append(run.locality.lng)
+                        line.append(run.id)
+                        line.append(run.datetime)
+                        line.append(run.plot_id)
+                        line.append(run.simulator.name[lang])
+                        line.append(run.crop.name[lang] or no_data_value)
+                        line.append(run.crop.crop_type.name[lang] or no_data_value)
+                        line.append(run.run_type.name[lang])
+                        line.append(run.get_initial_moisture_value() or no_data_value)
+                        line.append(run.get_surface_cover_value() or no_data_value)
+                        line.append(run.bbch or no_data_value)
+                        line.append(run.get_rainfall_intensity_value(6) or no_data_value)
+                        line.append(run.ttr)
+                        line.append(run.get_bulk_density_value(27) or no_data_value)
+
+                        # merge the dataframes into one with common 'time' index
+                        merged_data = pd.concat([runoff_data, sediment_data, rainfall_data], axis=1, join='outer')
+                        # re-order the rows by time
+                        try:
+                            merged_data.sort_index(inplace=True)
+                        except TypeError as e:
+                            print(
+                                f"Incompatible indexes in input dataframes - one or more of input dataframes is not a timeline")
+
+                        # Limit the index to end at the last time point of the runoff or sediment data
+                        end_time = min(merged_data[runoff_label].last_valid_index(),
+                                       merged_data[sed_conc_label].last_valid_index())
+                        merged_data = merged_data.loc[:end_time]
+
+                        # cross-interpolate for the runoff and sediment concentration values
+                        merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
+                        merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
+
+                        # forward-fill the rainfall intensity data and fill any remaining sediment concentration gaps
+                        merged_data[rain_int_label] = merged_data[rain_int_label].ffill()
+                        merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
+                        # calculate the sediment flux [g.min-1]
+                        merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
+                        # print(f"runoff + sediment concentration rainfall + sediment flux:\n{merged_data}\n\n")
+                        # integrate rainfall data stepwise to [mm]
+                        integrate_data_series(merged_data, rain_int_label, rain_tot_label,
+                                              interpolate=False, time_unit='minutes')
+                        # integrate runoff data linearly to [l]
+                        integrate_data_series(merged_data, runoff_label, discharge_label, interpolate=True,
+                                              time_unit='minutes')
+
+                        # integrate sediment flux to get total sediment yield in [g]
+                        integrate_data_series(merged_data, sed_flux_label, sed_yield_label, interpolate=True,
+                                              time_unit='minutes')
+
+                        # print(merged_data[runoff_label])
+                        # print(merged_data[sed_conc_label])
+                        # print(merged_data[sed_flux_label])
+                        # print(merged_data[sed_yield_label])
+                        line.append(format_timedelta_s(end_time))
+                        line.append(merged_data[rain_tot_label][end_time])
+                        line.append(merged_data[discharge_label][end_time])
+                        line.append(merged_data[sed_yield_label][end_time])
+
+                        writeRowToCSV(output_csv, line)
+                    else:
+                        print(f"One or both data series of run {run.id} is empty!\n"
+                              f"... which really shouldn't happen as the Record.get_data() returns None when the Record.data is empty dataframe ...")
+
+            # close the file
+            output_csv.close()
         else:
             print("No runs available within given limits.")
 
@@ -502,7 +855,7 @@ class Miner:
                         line.append(interpolated.loc[WRB_fraction_limits[1], 'cumulative_mass_content'])
                         line.append(interpolated.loc[WRB_fraction_limits[2], 'cumulative_mass_content'])
                     else:
-                        print("Soil sample assigned as texture sample doesn't have texture record assigned!")
+                        print("Assigned texture soil sample doesn't have texture record assigned!")
                         line.extend(["NA", "NA", "NA"])
                 else:
                     line.extend(["NA", "NA", "NA"])
@@ -1007,221 +1360,11 @@ class Miner:
         return
 
 
-    def generate_cumulative_values_csv(self, output_path, logfile_path = None, plots_dir = None):
-        """
-
-        :param output_path: path of the output file
-        :param logfile_path:
-        :param plots_dir: directory path for plots
-        :return:
-        """
-        # create runoffDB connection instance
-        rdb = RunoffDB()
-        # load runs matching input conditions
-        runs = rdb.load_runs(date_from=self.date_from, date_to=self.date_to)
-
-        if runs:
-            velocities_filename = "velocities.csv"
-
-            cumulatives_headers1 = {"cz": ["lokalita", "simID", "datum", "plot ID", "simulator", "plodina", "typ_plodiny", "poc_stav",
-                                          "poc_vlhkost", "canopy_cover", "BBCH", "intenzita", "TTR",
-                                           "odtok_l", "ztrata_pudy_g", "odtok_l", "ztrata_pudy_g", "odtok_l", "ztrata_pudy_g",
-                                           "povrchova rychlost [m.s-1]"],
-                                    "en": ["locality", "run ID", "date", "plot ID", "simulator", "crop", "crop type", "initial cond.",
-                                           "init. moisture", "canopy cover", "BBCH", "rain intensity", "time to runoff",
-                                           "cum. discharge [l]", "cum. soil loss [g]", "cum. discharge [l]", "cum. soil loss [g]", "cum. discharge [l]", "cum. soil loss [g]",
-                                           "povrchova rychlost [m.s-1]"]}
-
-            cumulatives_headers2 = ["", "", "", "", "", "", "", "", "", "", "", "", "", "t1=10min", "", "t1=20min", "", "t1=30min"]
-
-            # open the file for writing, overwrite if exists, write file headers
-            output_csv = open(output_path, "w", encoding="utf-8")
-            writeRowToCSV(output_csv, cumulatives_headers2)
-            writeRowToCSV(output_csv, cumulatives_headers1[lang])
-
-            # just for the counter
-            i = 1
-            num_runs = len(runs)
-            for run in runs.values():
-                # show the counter
-                print(f"{i}/{num_runs}")
-                i += 1
-
-                run_title = f"#{run.id} - {czech_date(run.datetime)} - {rdb.localities[run.locality_id]['name']} - {run.get_crop_name(lang)} [{run.plot_id}], {rdb.run_types[run.run_type_id]} {{{run.ttr}}}"
-                print(run_title)
-                # run.show_details()
-
-                # one row to be filled and written to the output files
-                line = []
-                # search for surface runoff rate record
-                runoff_record = None
-                runoff_data = None
-                # go through the record type priority list and find the first matching Record
-                for record_type in self.runoff_types_view_order:
-                    # get the best surface runoff measurement Record
-                    found_records = run.get_records(1, 1, record_type)
-                    if found_records:
-                        if len(found_records) > 1:
-                            print(f"\tMultiple runoff records of type {record_type} were found for run #{run.id}.\n"
-                                  f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
-                        runoff_record = found_records[0]
-                        # get runoff data in [l.min-1]
-                        runoff_data = runoff_record.get_data()
-                        # if runoff data exist break the search cycle
-                        if runoff_data is not None:
-                            # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
-                            break
-
-                # search for sediment concentration records
-                ss_record = None
-                sediment_data = None
-                # go through the record type priority list and find the first matching Record
-                for record_type in self.ss_types_view_order:
-                    # get the best sediment concentration measurement Record(s)
-                    found_records = run.get_records(2, [2, 3], record_type_id = record_type)
-                    # print(found_records)
-                    if found_records:
-                        if len(found_records) > 1:
-                            print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
-                                  f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
-                        ss_record = found_records[0]
-                        # print(f"sediment load best record of run {run.id} is {ss_record.id} (unit: {ss_record.unit_id}, record type: {ss_record.record_type_id})")
-                        # get the sediment concentration data in [g.l-1]
-                        sediment_data = ss_record.get_data_in_unit(3)
-                        # if sediment data exist break the search cycle
-                        if sediment_data is not None:
-                            # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
-                            break
-
-                # search for the surface flow velocity records
-                run.get_terminal_velocity_value()
-
-                # if both data are found
-                if runoff_data is not None and sediment_data is not None:
-                    # if both dataframes have some data
-                    if not runoff_data.empty and not sediment_data.empty:
-                        # check if the directory exists and if not create it
-                        if plots_dir:
-                            # check if the directory exists and if not create it
-                            if not os.path.isdir(plots_dir):
-                                os.mkdir(plots_dir)
-                        # gather all the info and values ========================================
-                        line.append(rdb.localities[run.locality_id]['name'])
-                        line.append(run.id)
-                        line.append(czech_date(run.datetime))
-                        line.append(run.plot_id)
-                        line.append(rdb.simulators[run.simulator_id])
-                        crop_name = run.get_crop_name(lang)
-                        if crop_name:
-                            line.append(crop_name)
-                        else:
-                            line.append("NA")
-                        if run.crop_type_id:
-                            line.append(rdb.crop_types[run.crop_type_id])
-                        else:
-                            line.append("NA")
-                        line.append(rdb.run_types[run.run_type_id])
-                        if run.initmoist_recid:
-                            line.append(run.get_initial_moisture_value())
-                        else:
-                            line.append("NA")
-                        if run.surface_cover_recid:
-                            line.append(run.get_surface_cover_value())
-                        else:
-                            line.append("NA")
-                        if run.bbch:
-                            line.append(run.bbch)
-                        else:
-                            line.append("NA")
-                        if run.rain_intensity_recid:
-                            line.append(run.get_rainfall_intensity())
-                        else:
-                            line.append("NA")
-                        line.append(run.ttr)
-
-
-                        runoff_label = f"runoff [{rdb.units.get(runoff_record.unit_id).unit}]"
-                        sed_conc_label = f"sed. conc. [{rdb.units.get(3).unit}]"
-                        sed_flux_label = f"sed. flux [{rdb.units.get(25).unit}]"
-                        tot_runoff_label = "total runoff"
-                        sed_mass_label = "sediment mass"
-
-                        # a common zero time is added (if possible) to force the integration from very start
-                        # and to allow for cross-interpolation if the sediment series starts later than the runoff series
-                        t0 = get_zero_time(runoff_data)
-                        if t0:
-                            runoff_data.loc[pd.Timedelta(t0)] = 0
-                            runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
-                            runoff_data.sort_index()
-                            # if the zero time from runoff series is before the first value of sediment series (should be)
-                            if t0 < sediment_data.index[0]:
-                                # New row to add
-                                sediment_data.loc[pd.Timedelta(t0)] = 0
-                                sediment_data = pd.concat([sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
-                                sediment_data.sort_index()
-                        else: # assign the runoff start time as t0
-                            t0 = run.ttr
-                        # print(f"runoff data:\n{runoff_data}\n")
-                        # print(f"sediment data:\n{sediment_data}\n\n")
-
-                        # merge the two dataframes into one with common 'time' index
-                        merged_data = pd.concat([runoff_data, sediment_data], axis=1, join='outer', keys=[runoff_label, sed_conc_label])
-                        # re-order the rows by time
-                        merged_data.reset_index(inplace=True)
-                        merged_data['time'] = pd.to_timedelta(merged_data['time'])
-                        merged_data.sort_values(by='time', inplace=True)
-                        # set the time index back
-                        merged_data.set_index('time', inplace=True)
-
-                        # cross-interpolate if the timepoints are not the same in the two series' and some values are missing
-                        merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
-                        merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
-                        # replace possible NaN at the very beginning of time series with 0
-                        # (situation when runoff has started but no sediment concentration data are available yet)
-                        merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
-
-                        # calculate the sediment flux [g.min-1]
-                        merged_data[(sed_flux_label, '[g.min-1]')] = merged_data[runoff_label] * merged_data[sed_conc_label]
-
-                        # calculate cumulative runoff series
-                        integrate_data_series(merged_data, runoff_label, (tot_runoff_label, '[l]'))
-                        # calculate cumulative sediment flux series
-                        integrate_data_series(merged_data, sed_flux_label, (sed_mass_label, '[g]'))
-                        print(f"merged data with total runoff and sediment:\n{merged_data}\n")
-
-                        # write the cumulative values in desired times
-                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=10), runoff_label, zero_time=t0, extrapolate=2))
-                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=10), sed_flux_label, zero_time=t0, extrapolate=2))
-
-                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=20), runoff_label, zero_time=t0, extrapolate=2))
-                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=20), sed_flux_label, zero_time=t0, extrapolate=2))
-
-                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=30), runoff_label, zero_time=t0, extrapolate=2))
-                        line.append(integrate_by_minutes(merged_data, t0, pd.Timedelta(minutes=30), sed_flux_label, zero_time=t0, extrapolate=2))
-
-                        # write the row to output
-                        writeRowToCSV(output_csv, line)
-
-                        if plots_dir:
-                            plot_series_to_file(merged_data, [runoff_label, tot_runoff_label], os.path.join(plots_dir, f"{run.id}_runoff"), run_title, "time [min]", ["runoff rate [l.min-1]", "total runoff [l]"], True)
-                            merged_data.index = merged_data.index.map(lambda x: format_timedelta_hms(x))
-                            merged_data.to_csv(os.path.join(plots_dir, f"{run.id}_runoff_sediment.csv"), sep=celld, decimal= ",")
-
-                    else:
-                        print(f"One or both data series of run {run.id} is empty!\n"
-                              f"... which really shouldn't happen as the Record.get_data() returns None when the Record.data is empty dataframe ...")
-
-            # close the files if were opened
-            output_csv.close()
-        else:
-            print("No runs available within given limits.")
-
-        return
-
 def sanitize_path(path_str):
     # Replace invalid characters for both Windows and Unix-like systems
     sanitized = re.sub(r'[<>:"/\\|?* ]', '_', path_str)
     return sanitized
+
 def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative = True, return_int = True, smallest_content = 1):
     # ensure original_texture is a pandas DataFrame
     if not isinstance(original_texture, pd.DataFrame):
@@ -1340,7 +1483,7 @@ def integrate_by_time(df, series_name, start_time = None, end_time = None, zero_
     :returns: discrete time integral values.
     """
 
-    # ensure dataframe is time-indexed
+    # ensure dataframe is timedelta-indexed
     if not isinstance(df.index, pd.TimedeltaIndex):
         raise ValueError("DataFrame index must be of type TimedeltaIndex.")
 
@@ -1363,36 +1506,52 @@ def integrate_by_time(df, series_name, start_time = None, end_time = None, zero_
 
     output_value = 0
     prev_time = None  # initialize prev_time with the first time index in the DataFrame
+    prev_value = None  # store the previous valid value (for NaN skipping)
 
     for time in df.index:
         # value = df.loc[time, series_name]
         value = get_value_in_time(df, time, series_name, zero_time, extrapolate)
+        # handle NaN value at the beginning of the series
+        if pd.isna(value):
+            if prev_time is None:
+                value = 0  # if NaN is at the start, treat it as 0
+            else:
+                continue  # skip row if NaN appears after valid values
+
         if prev_time is not None:
             if prev_time >= start_time and time <= end_time:
-                # for the case when two consequent times are equal = error in time data series
+                # handle error if two consequent times are equal
                 if time == prev_time:
-                    print(f"\nThere seems to be an error in your data - two consequent times are equal")
+                    print(f"\nError: two consequent times are equal at {time}. Skipping.")
                     continue
+
                 time_diff = time - prev_time
+
+                # perform integration with interpolation or stepwise
                 if interpolate:
                     output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
                 else:
                     output_value += prev_value * time_diff.total_seconds() / conversion_factor
+
             elif prev_time < start_time and time > start_time:
+                # handle the case when previous time is before start_time
                 time_diff = time - start_time
                 if interpolate:
                     output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
                 else:
                     output_value += prev_value * time_diff.total_seconds() / conversion_factor
+
             elif prev_time < end_time and time > end_time:
+                # handle the case when current time exceeds end_time
                 time_diff = end_time - prev_time
                 if interpolate:
                     output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
                 else:
                     output_value += prev_value * time_diff.total_seconds() / conversion_factor
+
+        # update previous time and previous value
         prev_time = time
         prev_value = value
-
     return output_value
 
 def integrate_data_series(df, series_name_in, series_name_out, interpolate=True, time_unit='minutes'):
@@ -1422,27 +1581,32 @@ def integrate_data_series(df, series_name_in, series_name_out, interpolate=True,
 
     return df
 
-def get_value_in_time(df, timedelta, series_name, zero_time=None, extrapolate=None):
+def get_value_in_time(df, timedelta, series_name, zero_time=None, interpolate=True, extrapolate=None):
     """
     Returns interpolated value of dataseries in time specified as timedelta
 
-    :param timedelta:
+    :param timedelta: the time point at which to get the value
     :param series_name: column name of the series to be interpolated
     :param zero_time: presumed time of start of the series (value = 0)
-    :param extrapolate: range of extrapolation specified as multiplication of last complete interval length
-    :returns: interpolated/extrapolated value if available based on specified inputs otherwise False
+    :param extrapolate: range of extrapolation specified as a multiplier of the last interval
+    :param interpolate: whether to interpolate values if exact match not found
+    :returns: interpolated/extrapolated value if available based on specified inputs, otherwise None
     """
 
-    # Ensure dataframe is time-indexed
+    # ensure dataframe is time-indexed
     if not isinstance(df.index, pd.TimedeltaIndex):
         raise ValueError("DataFrame index must be of type TimedeltaIndex.")
 
     first_time = df.index[0]
     last_time = df.index[-1]
 
+    # if timedelta is in the index, return the exact value directly
+    if timedelta in df.index:
+        return df.loc[timedelta, series_name]
+
     # if timedelta is before the first value
     if timedelta < first_time:
-        # if the zero time was specified
+        # if the zero time was specified, extrapolate to zero
         if zero_time:
             print(" - extrapolating to zero\n\n")
             return (df.loc[first_time, series_name] / (first_time - zero_time).total_seconds()) * (timedelta - zero_time).total_seconds()
@@ -1471,17 +1635,23 @@ def get_value_in_time(df, timedelta, series_name, zero_time=None, extrapolate=No
                         return v2 + (t3 - t2).total_seconds() * ((v2 - v1) / (t2 - t1).total_seconds())
 
             else:
-                print(
-                    f"Data series '{series_name}' doesn't have enough values for extrapolation.\n")
+                print(f"Data series '{series_name}' doesn't have enough values for extrapolation.\n")
                 return None
-        else:  # or return False if extrapolation not intended
+        else:
             print(f"Requested timedelta is after last record of '{series_name}' data series and extrapolation was not requested.\n")
             return None
 
+    # interpolate the output value if `interpolate=True`
+    if interpolate:
+        # reindex the dataframe to include the requested timedelta
+        df_with_requested_time = df.reindex(df.index.union([timedelta]))
+        # use linear interpolation
+        interpolated_series = df_with_requested_time[series_name].interpolate(method='time')
+        # retrieve the interpolated value
+        interpolated_value = interpolated_series.loc[timedelta]
+        return interpolated_value
     else:
-        # print(f"this is the dataframe inside the 'get_value_in_time():\n{df}")
-        return df[series_name].loc[timedelta]
-
+        return None
 
 # def plot_series_to_file(df, series_names, file_path, title=None, xlabel=None, ylabel=None, legend=True):
 #     """
@@ -1583,7 +1753,7 @@ def plot_series_to_file(df, series_names, file_path, title=None, xlabel = None, 
 def format_timedelta_hms(td, **kwargs):
     return str(td).split(' ')[2]
 
-def get_timedelta_s(timedelta):
+def format_timedelta_s(timedelta):
     return timedelta.total_seconds()
 
 def format_timedelta_min(timedelta):
@@ -1592,7 +1762,7 @@ def format_timedelta_min(timedelta):
 
     return f"{minutes:.1f}"
 
-def writeRowToCSV(fileref, towrite):
+def writeRowToCSV(fileref, towrite, lined="\n", celld=";"):
     linestring = ""
     i = 0
     for item in towrite:

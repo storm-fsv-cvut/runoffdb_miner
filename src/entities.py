@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
+import os.path
 
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime, time, date
 import json
-import mysql.connector
-import numpy as np
-from pint import UnitRegistry
-# import pint_pandas
 
 from src.db_access import DBconnector
 
@@ -29,7 +26,9 @@ def remove_last_zero_row(df):
     # Check if the last row value is equal to 0
     if df.iloc[-1]['value'] == 0:
         # Remove the last row
-        df = df.drop(df.index[-1])
+        df = df.copy().drop(df.index[-1])
+    return df
+
 def czech_date(datetime):
     return f"{datetime.strftime('%d.').strip('0')} {datetime.strftime('%m.').strip('0')} {datetime.strftime('%Y')}"
 
@@ -79,7 +78,10 @@ class RunoffDB:
     # 7 - estimated from similar conditions
     # 8 - rough estimate
 
-    def __init__(self, output_na_value = None):
+    def __init__(self, output_na_value=None, log_file_path=None):
+        print(80*"=")
+        print("RunoffDB initialization ... ")
+        print(80*"="+"\n")
         self.dbcon = DBconnector().pool.get_connection()
         self.na_value = output_na_value
 
@@ -93,10 +95,10 @@ class RunoffDB:
         self.localities = self.load_localities()
         self.agrotechnologies = self.load_agrotechnologies()
         self.units = self.load_units()
-        self.plots = self.load_plots()
-        self.samples = self.load_samples()
         self.crops = self.load_crops()
         self.protection_measures = self.load_protection_measures()
+        self.plots = self.load_plots()
+        self.samples = self.load_samples()
         self.projects = self.load_projects()
         self.phenomena = self.load_phenomena()
         self.record_types = self.load_record_types()
@@ -105,9 +107,42 @@ class RunoffDB:
         # do not load the runs as they might be limited by filters
         self.runs = None
 
+        self.log_file = log_file_path
+        self.run_log = {}
+        print("\n... everything is ready.")
+        print(80*"="+"\n")
 
+    def log(self, run_id, text_to_log):
+        """
+        Creates run id indexed log
+        :param run_id: run ID as key
+        :param text_to_log: text to append to the key
+        :return: None
+        """
+        if self.log_file is not None:
+            if run_id in self.run_log.keys():
+                self.run_log[run_id].append(text_to_log)
+            else:
+                self.run_log[run_id] = [text_to_log]
+        return
 
-    def load_runs(self, limit = None, date_from = None, date_to = None, simulators = None, localities = None, crops = None):
+    def save_log(self):
+        # save the log if requested on initialization and not empty
+        if self.log_file is not None and len(self.run_log) > 0:
+            print(f"\n\nlogging into '{self.log_file}'")
+            # delete the file if already exists
+            if os.path.isfile(self.log_file):
+                os.remove(self.log_file)
+            with open(self.log_file, "a") as f:
+                for run_id, logs in self.run_log.items():
+                    run = self.runs.get(run_id)
+                    f.write(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name['en']} - {run.run_type.name['en']}\n")
+                    for log in logs:
+                        f.write(f"\t{log} \n")
+                    f.write("\n")
+        return
+
+    def load_runs(self, limit=None, date_from=None, date_to=None, simulators=None, localities=None, crops=None):
         """
         Loads Run objects from database filtered to match given limitations. Loads all simulation runs if no filtres provided.
         :param limit: number of runs to load
@@ -129,6 +164,10 @@ class RunoffDB:
                     f"{self.runs_table}.`soil_sample_texture_id` AS texture_ss_id, " \
                     f"{self.runs_table}.`soil_sample_corg_id` AS corg_ss_id, " \
                     f"{self.runs_table}.`crop_bbch` AS bbch, " \
+                    f"{self.runs_table}.`note_cz`, " \
+                    f"{self.runs_table}.`note_en`, " \
+                    f"{self.runs_table}.`crop_condition_cz`, " \
+                    f"{self.runs_table}.`crop_condition_en`, " \
                     f"{self.run_groups_table}.`sequence_id` AS sequence_id, " \
                     f"{self.run_groups_table}.`datetime` AS datetime, " \
                     f"{self.sequences_table}.`simulator_id` AS simulator_id, " \
@@ -149,11 +188,11 @@ class RunoffDB:
             if date_to is not None:
                 query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
             if simulators is not None:
-                query += f" AND {self.sequences_table}.`simulator_id` IN '{', '.join([str(s) for s in simulators])}'"
+                query += f" AND {self.sequences_table}.`simulator_id` IN ({', '.join([str(s) for s in simulators])})"
             if localities is not None:
-                query += f" AND {self.plots_table}.`locality_id` IN '{', '.join([str(s) for s in localities])}'"
+                query += f" AND {self.plots_table}.`locality_id` IN ({', '.join([str(s) for s in localities])})"
             if crops is not None:
-                query += f" AND {self.runs_table}.`crop_id` IN '{', '.join([str(s) for s in crops])}'"
+                query += f" AND {self.runs_table}.`crop_id` IN ({', '.join([str(s) for s in crops])})"
             # additional conditions
             # query += f"AND `` = "
 
@@ -199,7 +238,7 @@ class RunoffDB:
                     new = Plot(self, **r)
                     plot_dict.update({new.id: new})
                 thecursor.close()
-                print(f"{len(plot_dict)} plots successfully loaded")
+                print(f"{len(plot_dict)} plots loaded")
                 return plot_dict
             return None
 
@@ -219,7 +258,7 @@ class RunoffDB:
                     new = SoilSample(self, **r)
                     samples_dict.update({new.id: new})
                 thecursor.close()
-                print(f"{len(samples_dict)} soil samples successfully loaded")
+                print(f"{len(samples_dict)} soil samples loaded")
 
                 return samples_dict
 
@@ -239,7 +278,7 @@ class RunoffDB:
                 for r in results:
                     new = Simulator(self, **r)
                     simulators.update({new.id: new})
-                print(f"{len(simulators)} simulators successfully loaded")
+                print(f"{len(simulators)} simulators loaded")
             thecursor.close()
         return simulators
 
@@ -257,7 +296,7 @@ class RunoffDB:
                 for r in results:
                     new = Organization(self, **r)
                     organizations.update({new.id: new})
-                print(f"{len(organizations)} organizations successfully loaded")
+                print(f"{len(organizations)} organizations loaded")
             thecursor.close()
         return organizations
 
@@ -274,7 +313,7 @@ class RunoffDB:
                 for r in results:
                     new = Locality(self, **r)
                     localities.update({new.id: new})
-            print(f"{len(localities)} localities successfully loaded")
+            print(f"{len(localities)} localities loaded")
             thecursor.close()
         return localities
 
@@ -290,7 +329,7 @@ class RunoffDB:
                 for r in results:
                     new = RunType(**r)
                     run_types.update({new.id: new})
-                print(f"run types successfully loaded")
+                print(f"run types loaded")
             thecursor.close()
         return run_types
 
@@ -306,7 +345,7 @@ class RunoffDB:
                 for r in results:
                     new = CropType(**r)
                     crop_types.update({new.id: new})
-            print(f"crop types successfully loaded")
+            print(f"crop types loaded")
             thecursor.close()
         return crop_types
 
@@ -322,7 +361,7 @@ class RunoffDB:
                 for r in results:
                     new = OperationType(**r)
                     op_types.update({new.id: new})
-                print(f"operation types successfully loaded")
+                print(f"operation types loaded")
             thecursor.close()
         return op_types
 
@@ -338,7 +377,7 @@ class RunoffDB:
                 for r in results:
                     new = OperationIntensity(**r)
                     op_ints.update({new.id: new})
-                print(f"operation intensities successfully loaded")
+                print(f"operation intensities loaded")
             thecursor.close()
         return op_ints
 
@@ -353,7 +392,7 @@ class RunoffDB:
                 for r in results:
                     new = ProtectionMeasure(**r)
                     out_dict.update({new.id: new})
-            print(f"{len(out_dict)} soil protection measures successfully loaded")
+            print(f"{len(out_dict)} soil protection measures loaded")
             thecursor.close()
         return out_dict
 
@@ -367,7 +406,7 @@ class RunoffDB:
                 for r in results:
                     new_unit = Unit(**r)
                     units.update({new_unit.id: new_unit})
-            print(f"{len(units)} units successfully loaded")
+            print(f"{len(units)} units loaded")
             thecursor.close()
         return units
 
@@ -381,7 +420,7 @@ class RunoffDB:
                 for r in results:
                     new_project = Project(**r)
                     projects.update({new_project.id: new_project})
-            print(f"projects successfully loaded")
+            print(f"projects loaded")
             thecursor.close()
         return projects
 
@@ -395,7 +434,7 @@ class RunoffDB:
                 for r in results:
                     new_crop = Crop(self, **r)
                     crops.update({new_crop.id: new_crop})
-            print(f"{len(crops)} crops successfully loaded")
+            print(f"{len(crops)} crops loaded")
             thecursor.close()
         return crops
 
@@ -409,7 +448,7 @@ class RunoffDB:
                 for r in results:
                     new_agt = Agrotechnology(self, **r)
                     agrotechnologies.update({new_agt.id: new_agt})
-            print(f"{len(agrotechnologies)} agrotechnologies successfully loaded")
+            print(f"{len(agrotechnologies)} agrotechnologies loaded")
             thecursor.close()
         return agrotechnologies
 
@@ -425,7 +464,7 @@ class RunoffDB:
                 for r in results:
                     new = Phenomenon(**r)
                     phenomena.update({new.id: new})
-                print(f"phenomena successfully loaded")
+                print(f"phenomena loaded")
             thecursor.close()
         return phenomena
 
@@ -441,7 +480,7 @@ class RunoffDB:
                     for r in results:
                         new = RecordType(**r)
                         record_types.update({new.id: new})
-                    print(f"record types successfully loaded")
+                    print(f"record types loaded")
                 thecursor.close()
             return record_types
 
@@ -457,7 +496,7 @@ class RunoffDB:
                     for r in results:
                         new = RecordType(**r)
                         record_types.update({new.id: new})
-                    print(f"quality indexes successfully loaded")
+                    print(f"quality indexes loaded")
                 thecursor.close()
             return record_types
 
@@ -585,18 +624,21 @@ class Run:
         self.crop = runoffdb.crops[self.crop_id]
         self.crop_type_id = kwargs["crop_type_id"]
         self.crop_name = None
+
         self.initmoist_recid = kwargs["initmoist_recid"]
         self.surface_cover_recid = kwargs["surface_cover_recid"]
         self.bbch = kwargs["bbch"]
         self.rain_intensity_recid = kwargs["rainfall_recid"]
 
         self.bulkd_ss_id = kwargs["bulkd_ss_id"]
+        self.bulkd_ss = self.runoffdb.samples[self.bulkd_ss_id] if self.bulkd_ss_id is not None else None
         self.texture_ss_id = kwargs["texture_ss_id"]
+        self.texture_ss = self.runoffdb.samples[self.texture_ss_id] if self.texture_ss_id is not None else None
         self.corg_ss_id = kwargs["corg_ss_id"]
+        self.corg_ss = self.runoffdb.samples[self.corg_ss_id] if self.corg_ss_id is not None else None
 
-        self.note = None
-
-
+        self.note = {"en": kwargs["note_en"], "cz": kwargs["note_cz"]}
+        self.crop_condition = {"en": kwargs["crop_condition_en"], "cz": kwargs["crop_condition_cz"]}
     def show_details(self, indent = "", measurement_details=False):
         print(indent + "\n" + 40 * "-")
         print(indent+f"run_id: {self.id}")
@@ -654,14 +696,16 @@ class Run:
             if len(initmoist_data.index) == 1:
                 return initmoist_data["initial_moisture"].mean()
             else:
+                self.runoffdb.log(self.id, f"dedicated initial moisture record {initmoist_rec.id} contains more than one value")
                 if multi_value:
                     return initmoist_data["initial_moisture"].toList()
                 else:
-                    print(f"Surface cover record {initmoist_rec.id} of run {self.id} has more then one value!")
+                    print(f"Initial moisture record {initmoist_rec.id} of run {self.id} has more then one value!")
                     print(f"Mean value of all {len(initmoist_data.index)} data points was returned.")
                     return initmoist_data["initial_moisture"].mean()
         else:
-            print(f"\trun #{self.id} doesn't have initial moisture record ID assigned.")
+            self.runoffdb.log(self.id, "initial moisture dedicated record not assigned")
+            print(f"\trun #{self.id} doesn't have dedicated initial moisture record ID assigned.")
             return None
 
 
@@ -682,6 +726,7 @@ class Run:
             if len(surface_cover_data.index) == 1:
                 return surface_cover_data["surface_cover"].mean()
             else:
+                self.runoffdb.log(self.id, f"dedicated surface cover record {surface_cover_rec.id} contains more than one value")
                 if multi_value:
                     return surface_cover_data["surface_cover"].toList()
                 else:
@@ -693,8 +738,49 @@ class Run:
             return 0
 
         else:
-            print(f"\trun #{self.id} doesn't have surface cover record ID assigned.")
+            self.runoffdb.log(self.id,f"surface cover dedicated record not assigned")
+            print(f"\trun #{self.id} doesn't have dedicated surface cover record ID assigned")
             return self.runoffdb.na_value
+
+    def get_crop_height_value(self):
+        crop_height_rec = self.get_best_record_of_unit(14, 31)
+        if crop_height_rec is not None:
+            crop_height_data = crop_height_rec.get_data("crop_height")
+            if crop_height_data is not None:
+                if not crop_height_data.empty:
+                    return crop_height_data["crop_height"].mean()
+                else:
+                    self.runoffdb.log(self.id, f"crop height data series of record {crop_height_rec.id} is empty")
+                    print(f"\tcrop height data series of record {crop_height_rec.id} is empty")
+                    return None
+            else:
+                self.runoffdb.log(self.id, f"crop height data of record {crop_height_rec.id} is None")
+                print(f"\tcrop height data of record {crop_height_rec.id} is None")
+                return None
+        else:
+            self.runoffdb.log(self.id, f"no crop height record found")
+            print(f"\trun #{self.id}has no crop height record")
+            return None
+
+    def get_plant_density_value(self):
+        plant_density_rec = self.get_best_record_of_unit(14, 30)
+        if plant_density_rec is not None:
+            plant_density_data = plant_density_rec.get_data("plant_density")
+            if plant_density_data is not None:
+                if not plant_density_data.empty:
+                    return plant_density_data["plant_density"].mean()
+                else:
+                    self.runoffdb.log(self.id, f"plant density data series of record {plant_density_rec.id} is empty")
+                    print(f"\tplant density data series of record {plant_density_rec.id} is empty")
+                    return None
+            else:
+                self.runoffdb.log(self.id, f"plant density data of record {plant_density_rec.id} is None")
+                print(f"\tplant density data of record {plant_density_rec.id} is None")
+                return None
+        else:
+            self.runoffdb.log(self.id, f"no plant density record found")
+            print(f"\trun #{self.id} has no plant density record")
+        return
 
     def get_rainfall_intensity_timeline(self, target_unit_id=None, series_label="rain_intensity"):
         if self.rain_intensity_recid is not None:
@@ -702,13 +788,19 @@ class Run:
             intensity_data = intensity_rec.get_data_in_unit(target_unit_id, series_label)
             # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
             if len(intensity_data.index) == 1:
+                self.runoffdb.log(self.id, f"rainfall intensity series of record {intensity_rec.id} contains only one data point")
                 print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
                 return None
-            else:
-                return intensity_data
-
+            elif len(intensity_data.index) == 2:
+                if intensity_data["rain_intensity"].iloc[-1] != 0:
+                    self.runoffdb.log(self.id, f"rainfall intensity timeline record {intensity_rec} not ending with 0")
+                    print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} doesn't end with zero value!")
+                    return None
+                else:
+                    return intensity_data
         else:
-            print(f"\trun #{self.id} doesn't have rainfall intensity record ID assigned.")
+            self.runoffdb.log(self.id, f"rainfall intensity dedicated record not assigned")
+            print(f"\trun #{self.id} doesn't have rainfall intensity dedicated record ID assigned")
             return None
 
     def get_rainfall_intensity_value(self, target_unit_id = None):
@@ -716,11 +808,9 @@ class Run:
         if intensity_data is not None:
             # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
             if len(intensity_data.index) == 1:
-                print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
                 return None
             elif len(intensity_data.index) == 2:
                 if intensity_data["rain_intensity"].iloc[-1] != 0:
-                    print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} doesn't end with zero value!")
                     return None
                 return intensity_data["rain_intensity"].iloc[0]
             else:
@@ -775,6 +865,8 @@ class Run:
         if self.rain_intensity_recid is not None:
             return self.runoffdb.load_record_by_id(self.rain_intensity_recid)
         else:
+            print(f"\trun #{self.id} doesn't have dedicated rainfall intensity record assigned")
+            # check if there's another rainfall intensity record that was not assigned as dedicated
             return self.get_best_record_of_unit(3, [6,28], view_order)
 
     def get_best_runoff_record(self, view_order=None):
@@ -794,6 +886,56 @@ class Run:
 
     def get_best_sediment_yield_value_tha(self):
         raise NotImplementedError("Run object method 'get_best_sediment_yield_value_tha()' is not implemented yet")
+
+    def get_soil_texture_record(self):
+        if self.texture_ss is not None:
+            # print(f"run {run.id} has texture sample {run.texture_ss_id}")
+            # print(f"sample {run.texture_ss_id} has texture record set {self.samples.get(run.texture_ss_id).texture_record_id}")
+            # load the record from DB
+            if self.texture_ss.texture_record_id is not None:
+                tex_rec = self.runoffdb.load_record_by_id(self.texture_ss.texture_record_id)
+                if tex_rec is not None:
+                    # print(f"unit of the record is '{self.units.get(tex_rec.unit_id).name_en}' with dimension [{self.units.get(tex_rec.unit_id).unit}]")
+                    # print(f"related X unit of the record is '{self.units.get(tex_rec.related_value_x_unit_id).name_en}' with dimension [{self.units.get(tex_rec.related_value_x_unit_id).unit}]")
+                    return tex_rec
+                else:
+                    print(f"\tdedicated texture soil sample of run #{self.id} returns None as texture record ID {self.texture_ss.texture_record_id}.\n"
+                          f"Check your data consistency in the database.")
+                    return None
+            else:
+                print(f"\tdedicated texture soil sample of run #{self.id} doesn't have dedicated texture record assigned.")
+                return None
+        else:
+            print(f"\trun #{self.id} doesn't have dedicated texture soil sample assigned")
+            return None
+
+    def get_bulk_density_redord(self):
+        if self.bulkd_ss is not None:
+            # print(f"run {run.id} has texture sample {run.texture_ss_id}")
+            # load the record from DB
+            if self.bulkd_ss.bulk_density_id is not None:
+                bulkd_rec = self.runoffdb.load_record_by_id(self.bulkd_ss.bulk_density_id)
+                if bulkd_rec is not None:
+                    return bulkd_rec
+                else:
+                    print(f"\tassigned bulk density soil sample of run #{self.id} returns None as bulk density record ID {self.bulkd_ss.bulk_density_id}.\n"
+                          f"Check your data consistency in the database.")
+                    return None
+            else:
+                print(f"\tdedicated bulk density soil sample of run #{self.id} doesn't have dedicated bulk density record assigned.")
+                return None
+        else:
+            print(f"\trun #{self.id} doesn't have dedicated bulk density soil sample assigned")
+            return None
+
+    def get_bulk_density_value(self, target_unit_id=None):
+        bulkd_record = self.get_bulk_density_redord()
+        if bulkd_record:
+            bulk_data = bulkd_record.get_data_in_unit(target_unit_id, "bulk_density")
+            if bulk_data is not None:
+                if not bulk_data.empty:
+                    return bulk_data["bulk_density"].mean()
+        return None
 
     def get_records(self, phenomenon_id=None, unit_id=None, record_type_id=None):
         out = []
@@ -1166,20 +1308,18 @@ class Record:
         """
         if self.data is not None:
             if remove_last_zero:
-                return remove_last_zero_row(self.data.copy())
+                return remove_last_zero_row(self.data)
             else:
                 return self.data
         else:
-            # the data were not loaded yet
+            # the data may not be loaded yet
             self.load_data(value_name=value_name, index_column=index_column)
+
             if self.data is not None:
                 if self.data.empty:
                     return None
                 else:
-                    if remove_last_zero:
-                        return remove_last_zero_row(self.data.copy())
-                    else:
-                        return self.data
+                    return self.get_data(value_name, index_column, remove_last_zero)
             else:
                 return None
 
@@ -1197,7 +1337,7 @@ class Record:
             if target_unit_id is None:
                 print(f"Unit ID for data retrieval was not specified - returning in original unit: {self.unit_id} ({self.unit.unit})!")
                 return self.data
-            output_column_label = output_column_label if output_column_label is not None else value_name
+            output_column_label = output_column_label or value_name
 
             multiply_by = multipliers.get(self.unit_id).get(target_unit_id)
             if not multiply_by:
@@ -1364,6 +1504,7 @@ class Plot:
         self.soil_origin_locality_id = kwargs.get("soil_origin_locality_id")
         self.name = kwargs.get("name")
         self.crop_id = kwargs.get("crop_id")
+        self.crop = self.runoffdb.crops[self.crop_id] if self.crop_id is not None else None
         self.agrotechnology_id = kwargs.get("agrotechnology_id")
         self.agrotechnology = runoffdb.agrotechnologies[self.agrotechnology_id] if self.agrotechnology_id is not None else None
         self.established = kwargs.get("established")
@@ -1371,6 +1512,9 @@ class Plot:
         self.plot_length = kwargs.get("plot_length")
         self.plot_slope = kwargs.get("plot_slope")
         self.protection_measure_id = kwargs.get("protection_measure_id")
+        self.protection_measure = self.runoffdb.protection_measures[self.protection_measure_id] if self.protection_measure_id is not None else None
+
+        self.note = {"cz": kwargs.get("note_cz"), "en": kwargs.get("note_en")}
 
 
     def get_last_run_datetime(self):
@@ -1386,6 +1530,28 @@ class Plot:
                 return results[0]
 
         return None
+
+    def days_since_seeding(self, datetime):
+        # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
+        if self.crop_id == 1:
+            return None
+        else:
+            if self.agrotechnology is not None:
+                return self.agrotechnology.days_since_seeding(datetime)
+            else:
+                print(f"\tplot {self.id} has no agrotechnology assigned")
+                return None
+
+    def days_since_last_operation(self):
+        # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
+        if self.crop_id == 1:
+            return 0
+        else:
+            if self.agrotechnology is not None:
+                return self.agrotechnology.days_since_last_operation(date)
+            else:
+                print(f"\tplot {self.id} has no agrotechnology assigned")
+                return None
 
     def get_runs_on_plot(self):
         with self.runoffdb.dbcon.cursor() as thecursor:
@@ -1490,27 +1656,22 @@ class Agrotechnology:
         self.operation_sequence = self.load_operation_sequence()
 
     def load_operation_sequence(self):
-        dbcon = DBconnector().pool.get_connection()
-        if dbcon:
-            thecursor = dbcon.cursor(dictionary=True)
+        with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
 
             query = f"SELECT `operation_id`, `date` FROM {RunoffDB.tillageseq_table} WHERE `agrotechnology_id` = {self.id}"
             # print(query)
             thecursor.execute(query)
             results = thecursor.fetchall()
+            thecursor.close()
 
-            if thecursor.rowcount == 0:
+            if len(results) == 0:
                 print(f"\tno tillage sequence entry found for agrotechnology ID {self.id}")
-                dbcon.close()
                 return {}
             else:
                 sequence = {}
                 for r in results:
                     sequence.update({r["date"]: Agrotechnology.operations.get(r["operation_id"])})
-                dbcon.close()
                 return sequence
-        else:
-            return None
 
     def get_maximum_disturbance_level(self):
         if self.operation_sequence is None or self.operation_sequence == {}:
@@ -1534,6 +1695,43 @@ class Agrotechnology:
             if op.id == 12:
                 return True
         return False
+
+    def days_since_seeding(self, input_datetime):
+        # check if the input is a datetime or a date
+        if isinstance(input_datetime, datetime):
+            # extract just the date if it's a datetime
+            the_date = input_datetime.date()
+        elif isinstance(input_datetime, date):
+            the_date = input_datetime
+        else:
+            raise ValueError("The input must be a date or datetime object.")
+
+        # sort the operation_sequence by date in reverse order (most recent first)
+        for operation_date in sorted(self.operation_sequence.keys(), reverse=True):
+            if operation_date <= the_date:
+                # Check if the operation type is "seeding"
+                if self.operation_sequence[operation_date].operation_type_id == 3:
+                    # Return the number of days since the last seeding
+                    return (the_date - operation_date).days
+        # If no "seeding" operation was found, return None or a suitable value (e.g. -1)
+        return None
+
+    def days_since_last_operation(self, input_datetime):
+        # check if the input is a datetime or a date
+        if isinstance(input_datetime, datetime):
+            # extract just the date if it's a datetime
+            the_date = input_datetime.date()
+        elif isinstance(input_datetime, date):
+            the_date = input_datetime
+        else:
+            raise ValueError("The input must be a date or datetime object.")
+        # Sort the operation_sequence by date in reverse order (most recent first)
+        for operation_date in sorted(self.operation_sequence.keys(), reverse=True):
+            if operation_date <= the_date:
+                # Return the number of days since the last seeding
+                return (the_date - operation_date).days
+        # If no "seeding" operation was found, return None or a suitable value (e.g. -1)
+        return None
 
     def get_metadata(self, lang="en"):
         meta = {"name": self.name[lang]}
