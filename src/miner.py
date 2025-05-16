@@ -12,6 +12,7 @@ from pint import UnitRegistry
 
 from src.db_access import DBconnector
 from .entities import *
+from .entities import interpolate_texture, integrate_by_time, integrate_by_minutes, integrate_data_series, get_zero_time, get_value_in_time
 
 
 lang = "en"
@@ -46,6 +47,11 @@ class Miner:
         # 7 - estimated from similar conditions
         # 8 - rough estimate
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+       return
 
     def repair_psd(self):
         """
@@ -86,10 +92,17 @@ class Miner:
             return None
         return
 
-    def generate_structured_dump(self, root_path, date_from = None, date_to = None, lang="en"):
-        # create runoffDB connection instance
+    def generate_structured_dump(self, root_path, date_from=None, date_to=None, lang="en"):
+        try:
+            os.mkdir(root_path) if not os.path.isdir(root_path) else None
+        except OSError as error:
+            print("Selected directory for the dump does not exist and it's not possible to create it.")
+            print("Dump failed.")
+            return
+
+        # create runoffDB instance
         rdb = RunoffDB()
-        # get dates when some simulation occurred
+        # get all dates when any simulation occurred
         all_days = rdb.get_simulation_days(date_from, date_to)
         print("\n")
 
@@ -115,7 +128,10 @@ class Miner:
                         os.mkdir(sim_dir)
                     except OSError as error:
                         pass
-                    run.save_metadata(os.path.join(sim_dir, sim_dir_name+".json"))
+
+                    # collect and save run metadata
+                    with open(os.path.join(sim_dir, sim_dir_name+".json"), "w") as f:
+                        json.dump(run.get_metadata(), f, ensure_ascii=False, indent=4)
 
                     # loop through all phenomena and if measurement exists go through it's records
                     for phid in rdb.get_all_phenomena_ids():
@@ -124,7 +140,7 @@ class Miner:
                             for ms in msrmnts:
                                 # loop through units and if record exists export it
                                 for uid in rdb.get_all_units_ids():
-                                    rcrds = ms.get_records(uid)
+                                    rcrds = ms.get_records(phenomenon_id=uid)
                                     if rcrds is not None:
                                         recids = []
                                         for rec in rcrds:
@@ -135,43 +151,54 @@ class Miner:
                                                 index = True if rec.is_timeline else False
                                                 # column_headers = ["time"] if rec.is_timeline else []
                                                 column_headers = []
-                                                data_df = rec.get_data("value", index_column=index_column)
-                                                if data_df is not None:
-                                                    rec_filename = sanitize_path(f"{rec.id}-{rec.unit.name[lang]}-[{rec.unit.unit}]")
-                                                    column_headers.append(f"{rec.unit.name[lang]} [{rec.unit.unit}]")
-                                                    column_headers.append(f"{rec.unit_rel_x.name[lang]} [{rec.unit_rel_x.unit}]") if rec.related_value_x_unit_id is not None else None
-                                                    column_headers.append(f"{rec.unit_rel_y.name[lang]} [{rec.unit_rel_y.unit}]") if rec.related_value_y_unit_id is not None else None
-                                                    column_headers.append(f"{rec.unit_rel_z.name[lang]} [{rec.unit_rel_z.unit}]") if rec.related_value_z_unit_id is not None else None
+                                                rec_filename = sanitize_path(f"{rec.id}-{rec.unit.name[lang]}-[{rec.unit.unit}]")
 
-                                                    # format the TimeDelta index to desired format (get rid of the '0 days')
-                                                    if pd.api.types.is_timedelta64_dtype(data_df.index):
-                                                        data_df.index = data_df.index.map(lambda
-                                                                                    x: f"{x.components.hours:02}:{x.components.minutes:02}:{x.components.seconds:02}")
-
-                                                    print(f"#{rec.id}: {column_headers} ({rdb.record_types[rec.record_type_id].name[lang]})")
-
-                                                    # if ms.phenomenon_id == 16:
-                                                    #     print(data_df)
-
-                                                    # try:
-                                                    data_df.to_csv(os.path.join(sim_dir, rec_filename+".csv"),
-                                                               index=index,
-                                                               sep=";",
-                                                               decimal=",",
-                                                               header=column_headers)
-                                                    # except ValueError:
-                                                    #     print(data_df)
+                                                try:
+                                                    data_df = rec.get_data("value", index_column=index_column)
+                                                except DataframeEmptyError as e:
+                                                    print(f"\t{e.message}")
+                                                    print(f"rec_filename: {rec_filename}")
+                                                    print(f"sim_dir: {sim_dir}")
+                                                    with open(os.path.join(sim_dir, rec_filename+".csv"), "w") as f:
+                                                        f.write(e.message)
                                                 else:
-                                                    print(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
+                                                    if data_df is not None:
 
+                                                        column_headers.append(f"{rec.unit.name[lang]} [{rec.unit.unit}]")
+                                                        column_headers.append(f"{rec.unit_rel_x.name[lang]} [{rec.unit_rel_x.unit}]") if rec.related_value_x_unit_id is not None else None
+                                                        column_headers.append(f"{rec.unit_rel_y.name[lang]} [{rec.unit_rel_y.unit}]") if rec.related_value_y_unit_id is not None else None
+                                                        column_headers.append(f"{rec.unit_rel_z.name[lang]} [{rec.unit_rel_z.unit}]") if rec.related_value_z_unit_id is not None else None
+
+                                                        # format the TimeDelta index to desired format (get rid of the '0 days')
+                                                        if pd.api.types.is_timedelta64_dtype(data_df.index):
+                                                            data_df.index = data_df.index.map(lambda
+                                                                                        x: f"{x.components.hours:02}:{x.components.minutes:02}:{x.components.seconds:02}")
+
+                                                        print(f"#{rec.id}: {column_headers} ({rdb.record_types[rec.record_type_id].name[lang]})")
+
+                                                        # if ms.phenomenon_id == 16:
+                                                        #     print(data_df)
+
+                                                        # try:
+                                                        local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
+                                                        data_df.to_csv(os.path.join(sim_dir, rec_filename+".csv"),
+                                                                   index=index,
+                                                                   sep=local_seps["celld"][lang],
+                                                                   decimal=local_seps["decd"][lang],
+                                                                   header=column_headers)
+                                                        # except ValueError:
+                                                        #     print(data_df)
+                                                    else:
+                                                        print(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
+                                                        with open(os.path.join(sim_dir, rec_filename+".csv", "w")) as f:
+                                                            f.write(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
                                         # print(f"{phid} - {len(ms.records)} ({', '.join([str(rid) for rid in recids])})")
 
 
 
             else:
                 print(f"\t{day_start.strftime('%Y-%m-%d')} skipped")
-        # load runs matching input conditions
-        # runs = rdb.load_runs(date_from=self.date_from, date_to=self.date_to)
+        return
 
     def generate_html_overview(self, output_path, date_from=None, date_to=None):
         cumulatives_headers1 = ["lokalita", "simID", "datum", "plot ID", "simulator ID", "plodina", "poc_stav",
@@ -204,7 +231,7 @@ class Miner:
         return
 
 
-    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", interpolate_zero_time=False, log_file=None):
+    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", interpolate_zero_time=False, log_file=None, **kwargs):
         """
         Generates runoff and sediment export for all simulation runs fitting into given limits.
         Each row in the output file represents a time interval in merged data of precipitation intensity, runoff rate, sediment concentration
@@ -218,237 +245,221 @@ class Miner:
         :param log_file:
         :return:
         """
-        rdb = RunoffDB(log_file_path=log_file)
-        # the runs may not be loaded yet ...
-        if rdb.runs is None:
-            rdb.load_runs(date_from=date_from, date_to=date_to)
+        with RunoffDB(log_file_path=log_file) as rdb:
+        # rdb = RunoffDB(log_file_path=log_file)
+            # the runs may not be loaded yet ...
+            if rdb.runs is None:
+                rdb.load_runs(date_from=date_from, date_to=date_to)
 
-        if rdb.runs:
-            headers = {"cz": ["ID sekvence", "ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "název plochy", "délka plochy [m]",
-                            "šířka plochy [m]", "sklon plochy [%]", "poznámky k ploše", "dnů od zasetí", "ochranné opatření", "ID simulátoru", "simulátor",
-                              "ID plodiny", "plodina", "stav plodiny", "výška plodiny [cm]", "počet rostlin [1/m2]", "BBCH",  "zakrytí povrchu [%]",
-                            "počáteční stav", "počáteční vlhkost","<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
-                              "objemová hmotnost [g/cm3]", "intenzita srážky [mm/h]",
-                              "TTR", "interval", "délka intervalu", "t1", "t2", "srážkový úhrn [mm]",
-                              "průtok [l/min]", "celkový odtok [l]", "koncentrace sedimentu [g/l]", "tok sedimentu[g/min]",
-                              "ztráta půdy [g]"],
-                     "en": ["sequence ID", "run ID", "locality ID", "locality", "date", "plot ID", "plot name", "plot length [m]",
-                            "plot width [m]", "plot slope [%]", "plot notes", "days since seeding", "soil protection measure",
-                            "simulator ID", "simulator", "crop ID", "crop", "crop condition", "BBCH",  "surface cover [%]",
-                            "initial cond.", "init. moisture","<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
-                            "bulk density [g.cm-3]", "rain intensity [mm.h-1]",
-                            "time to runoff", "interval #", "interval duration", "t1", "t2", "rainfall total [mm]",
-                            "flow rate [l.min-1]", "total discharge [l]", "SS concentration [g.l-1]", "SS flux [g.min-1]",
-                            "sediment yield[g]"]}
 
-            output_csv = open(output_path, "w", encoding="utf-8")
-            writeRowToCSV(output_csv, headers[lang])
-            # list of records that have is_timeline issue
-            invalid_record_ids = []
-            for run in rdb.runs.values():
-                print()
-                # single row to be filled and written to the output files
-                # one line represents one time interval of a measured time series within a run
-                line = []
+            if not rdb.runs:
+                print("No runs available within given limits.")
+                return
 
-                print(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}")
+            else:
+                headers = {"cz": ["ID sekvence", "ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "název plochy", "délka plochy [m]",
+                                "šířka plochy [m]", "sklon plochy [%]", "poznámky k ploše", "dnů od zasetí", "ochranné opatření", "ID simulátoru", "simulátor",
+                                  "ID plodiny", "plodina", "stav plodiny", "výška plodiny [cm]", "počet rostlin [1/m2]", "BBCH",  "zakrytí povrchu [%]",
+                                "počáteční stav", "počáteční vlhkost","<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
+                                  "objemová hmotnost [g/cm3]", "intenzita srážky [mm/h]",
+                                  "TTR", "interval", "délka intervalu", "t1", "t2", "srážkový úhrn [mm]",
+                                  "průtok [l/min]", "celkový odtok [l]", "koncentrace sedimentu [g/l]", "tok sedimentu[g/min]",
+                                  "ztráta půdy [g]"],
+                         "en": ["sequence ID", "run ID", "locality ID", "locality", "date", "plot ID", "plot name", "plot length [m]",
+                                "plot width [m]", "plot slope [%]", "plot notes", "days since seeding", "soil protection measure",
+                                "simulator ID", "simulator", "crop ID", "crop", "crop condition", "crop height [cm]", "plant density [pcs.m^2]", "BBCH",  "surface cover [%]",
 
-                # gather all the info and values common for the whole simulation run ===================================
-                line.append(run.sequence_id)
-                line.append(run.id)
-                line.append(run.locality.id)
-                line.append(run.locality.name)
-                line.append(czech_date(run.datetime))
-                line.append(run.plot_id)
-                line.append(run.plot.name)
-                line.append(run.plot.plot_length)
-                line.append(run.plot.plot_width)
-                line.append(run.plot.plot_slope)
-                line.append(run.plot.note[lang] or no_data_value)
-                line.append(run.plot.days_since_seeding(run.datetime) or no_data_value)
-                line.append(run.plot.protection_measure.name[lang] if run.plot.protection_measure is not None else no_data_value)
-                line.append(run.simulator.id)
-                line.append(run.simulator.name[lang])
-                line.append(run.crop_id if run.crop_id else no_data_value)
-                line.append(run.crop.name[lang] if run.crop else no_data_value)
-                line.append(f"\"{run.crop_condition[lang]}\""  if run.crop else no_data_value)
-                line.append(run.get_crop_height_value() or no_data_value)
-                line.append(run.get_plant_density_value() or no_data_value)
-                line.append(run.bbch or no_data_value)
-                line.append(run.get_surface_cover_value() or no_data_value)
-                line.append(run.run_type.name[lang])
-                line.append(run.get_initial_moisture_value() or no_data_value)
+                                "initial cond.", "init. moisture","<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
+                                "bulk density [g.cm-3]", "rain intensity [mm.h-1]",
+                                "time to runoff", "interval #", "interval duration", "t1", "t2", "rainfall total [mm]",
+                                "flow rate [l.min-1]", "total discharge [l]", "SS concentration [g.l-1]", "SS flux [g.min-1]",
+                                "sediment yield[g]"]}
 
-                texture_record = run.get_soil_texture_record()
-                if texture_record is not None:
-                    texture_data = texture_record.load_data("cumulative_mass_content", "particle_size", index_column="particle_size",
-                                             order_by="particle_size")
-                    if not texture_data.empty:
-                        # upper size limits for clay/silt/sand
-                        WRB_fraction_limits = [0.002, 0.063, 2]
-                        interpolated_texture = interpolate_texture(texture_data,
-                                                                   WRB_fraction_limits,
-                                                                   "cumulative_mass_content",
-                                                                    return_int=False, return_cumulative=False)
-                        line.append(interpolated_texture.loc[WRB_fraction_limits[0], 'cumulative_mass_content'])
-                        line.append(interpolated_texture.loc[WRB_fraction_limits[1], 'cumulative_mass_content'])
-                        line.append(interpolated_texture.loc[WRB_fraction_limits[2], 'cumulative_mass_content'])
+                # open the output file for writing
+                output_csv = open(output_path, "w", encoding="utf-8")
+                # and write the column headers
+                writeRowToCSV(output_csv, headers[lang])
+
+                # list of records that have issues - database content debugging
+                invalid_record_ids = []
+
+                num_runs_tot = 0
+                num_runs_exported = 0
+                num_runs_empty = 0
+
+                for run in rdb.runs.values():
+                    num_runs_tot += 1
+                    print()
+                    # single row to be filled and written to the output files
+                    # one line represents one time interval of a measured time series within a run
+                    line = []
+
+                    print(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}")
+
+                    # gather all the info and values common for the whole simulation run ===================================
+                    # id of sequence the run belungs to
+                    line.append(run.sequence_id)
+                    # id of the run
+                    line.append(run.id)
+                    # id of locality where the run took place
+                    line.append(run.locality.id)
+                    # name of the locality where the run took place
+                    line.append(run.locality.name)
+                    # date of the run
+                    line.append(czech_date(run.datetime))
+                    # id of the plot where the run was executed
+                    line.append(run.plot_id)
+                    # name of the plot where the run was executed
+                    line.append(run.plot.name)
+                    # length in meters of the plot where the run was executed
+                    line.append(run.plot.plot_length)
+                    line.append(run.plot.plot_width)
+                    line.append(run.plot.plot_slope)
+                    line.append(run.plot.note[lang].replace(";", ".") if run.plot.note[lang] else no_data_value)
+                    line.append(run.plot.days_since_seeding(run.datetime) or no_data_value)
+                    line.append(run.plot.protection_measure.name[lang] if run.plot.protection_measure is not None else no_data_value)
+                    line.append(run.simulator.id)
+                    line.append(run.simulator.name[lang])
+                    line.append(run.crop_id if run.crop_id else no_data_value)
+                    line.append(run.crop.name[lang] if run.crop else no_data_value)
+                    line.append(f"\"{run.crop_condition[lang]}\"" if run.crop_condition[lang] else no_data_value)
+                    line.append(run.get_crop_height_value() or no_data_value)
+                    line.append(run.get_plant_density_value() or no_data_value)
+                    line.append(run.bbch or no_data_value)
+                    line.append(run.get_surface_cover_value() or no_data_value)
+                    line.append(run.run_type.name[lang])
+                    line.append(run.get_initial_moisture_value() or no_data_value)
+
+                    # get and transform soil texture data
+                    WRB_fraction_limits = [0.002, 0.063, 2]
+                    try:
+                        texture_data = run.get_best_soil_texture_data("cumulative_mass_content", "particle_size", index_column="particle_size",
+                                                 order_by="particle_size", limits=WRB_fraction_limits)
+                    except DataframeEmptyError as dee:
+                        line.extend(len(WRB_fraction_limits) * [no_data_value])
+                        rdb.log(run.id, f"soil texture data missing: {dee.message}")
+
                     else:
-                        line.extend([no_data_value, no_data_value, no_data_value])
-                else:
-                    line.extend([no_data_value, no_data_value, no_data_value])
+                        if texture_data is not None:
+                            for i, cl in enumerate(WRB_fraction_limits):
+                                line.append(texture_data.loc[WRB_fraction_limits[i], 'cumulative_mass_content'])
+                        else:
+                            line.extend(len(WRB_fraction_limits) * [no_data_value])
 
-                line.append(run.get_bulk_density_value(27) or no_data_value)
-                line.append(run.get_rainfall_intensity_value(6) or no_data_value)
-                line.append(run.ttr)
+                    # get bulk density data
+                    try:
+                        line.append(run.get_best_bulk_density_value(27) or no_data_value)
+                    except DataframeEmptyError as dee:
+                        line.append(no_data_value)
+                        rdb.log(run.id, f"bulk density data missing: {dee.message}")
 
-                # get best runoff, sediment concentration and rainfall data
-                runoff_record = run.get_best_runoff_record()
-                sed_conc_record = run.get_best_sediment_concentration_record()
-                rainfall_record = run.get_best_rainfall_record()
+                    try:
+                        line.append(run.get_rainfall_intensity_value(6) or no_data_value)
+                    except DataframeEmptyError as dee:
+                        line.append(no_data_value)
+                        rdb.log(run.id, f"rainfall intensity data missing: {dee.message}")
 
-                # if both records were found
-                if runoff_record is not None and sed_conc_record is not None and rainfall_record is not None:
-                    # prepare column labels for dataframes
-                    runoff_label = "runoff_rate"
-                    discharge_label = "total_discharge"
+                    line.append(run.ttr)
+
+                    # get DataFrame with all hydro-sediment data
+
+                    rain_int_label = "rainfall_intensity"
+                    rain_tot_label = "rainfall_total"
+                    runoff_label = "runoff"
+                    discharge_label = "discharge"
                     sed_conc_label = "sediment_concentration"
                     sed_flux_label = "sediment_flux"
                     sed_yield_label = "sediment_yield"
 
-                    rain_int_label = "rainfall_intensity"
-                    rain_tot_label = "rainfall_total"
+                    request = {
+                        "rainfall_intensity": True,
+                        "rainfall_total": True,
+                        "runoff": True,
+                        "sediment_concentration": True,
+                        "discharge": True,
+                        "sediment_flux": True,
+                        "sediment_yield": True
+                    }
 
-                    # get rainfall intensity data in mm.min^-1
-                    rainfall_data = rainfall_record.get_data_in_unit(28, rain_int_label)
-                    # get runoff data in [l.min-1]
-                    runoff_data = runoff_record.get_data_in_unit(1, runoff_label)
-                    # get the sediment concentration data in [g.l-1]
-                    sediment_data = sed_conc_record.get_data_in_unit(3, sed_conc_label)
+                    labels = {
+                        "rainfall_intensity": rain_int_label,
+                        "rainfall_total": rain_tot_label,
+                        "runoff": runoff_label,
+                        "sediment_concentration": sed_conc_label,
+                        "discharge": discharge_label,
+                        "sediment_flux": sed_flux_label,
+                        "sediment_yield": sed_yield_label
+                    }
+                    # all requests are False to get all runs
+                    request = {key: False for key in labels}
 
-                    # if all needed dataframes are not empty
                     try:
-                        not runoff_data.empty and not sediment_data.empty and not rainfall_data.empty
-                    except AttributeError as e:
-                        print(f"run {run.id} has record {rainfall_record.id} with no data.")
+                        hydro_data = run.get_best_hydro_data(request_map=request, labels_map=labels)
+                    except RecordSetNotComplete as e:
+                        # if any of needed records is not available skip the run and log why
+                        rdb.log(run.id, f"Following essential hydro-sediment records are not available: {', '.join([r for r in e.missing_records])}. "
+                                        f"\n\tThe run was excluded from the export.")
+                        continue
+                    else:
+                        hydro_data.fillna(no_data_value, inplace=True)
+                        # in case all hydro-sediment data are empty
+                        if hydro_data.empty:
+                            no_data_row = [no_data_value] * (len(hydro_data.columns) + 4)  # +4 for index fields
+                            writeRowToCSV(output_csv, line + no_data_row)
+                            num_runs_empty += 1
+                            num_runs_exported += 1
+                            rdb.log(run.id, f"\n\tRun exported with no hydro/sediment data.")
+                            continue
 
-                    if not runoff_data.empty and not sediment_data.empty and not rainfall_data.empty:
-                        # data validity flag
-                        invalid_data = []
+                    # print(hydro_data[rain_int_label])
+                    # print(hydro_data[rain_tot_label])
+                    # print(hydro_data[runoff_label])
+                    # print(hydro_data[sed_conc_label])
+                    # print(hydro_data[sed_flux_label])
+                    # print(hydro_data[sed_yield_label])
 
-                        if not isinstance(rainfall_data.index, pd.TimedeltaIndex):
-                            invalid_data.append(f"rainfall record  {sed_conc_record.id} is not a timeline")
-                            invalid_record_ids.append(run.rain_intensity_recid)
+                    i = 1
+                    prev_index = None
+                    for index, row in hydro_data.iterrows():
+                        line_int = []
 
-                        if not isinstance(runoff_data.index, pd.TimedeltaIndex):
-                            invalid_data.append(f"runoff record {runoff_record.id} is not a timeline")
-                            invalid_record_ids.append(runoff_record.id)
+                        t1 = format_timedelta(index)
+                        # skip time intervals before runoff appeared
+                        if run.ttr > index:
+                            continue
+                        t2 = format_timedelta(index - run.ttr)
+                        int_dur = format_timedelta(index-prev_index) if prev_index is not None else no_data_value
 
-                        if not isinstance(sediment_data.index, pd.TimedeltaIndex):
-                            invalid_data.append(f"sediment concentration record  {sed_conc_record.id} is not a timeline")
-                            invalid_record_ids.append(sed_conc_record.id)
+                        line_int.append(i)
+                        line_int.append(int_dur)
+                        line_int.append(t1)
+                        line_int.append(t2)
+                        line_int.append(row[rain_tot_label])
+                        line_int.append(row[runoff_label])
+                        line_int.append((row[discharge_label]))
+                        line_int.append(row[sed_conc_label])
+                        line_int.append(row[sed_flux_label])
+                        line_int.append(row[sed_yield_label])
 
-                        if len(invalid_data) == 0:
-                            if interpolate_zero_time:
-                                # a common zero time is added (if possible) to force the integration from very start
-                                # and to allow for cross-interpolation if the sediment series starts later than the runoff series
-                                t0 = get_zero_time(runoff_data, runoff_label)
-                                if t0:
-                                    runoff_data.loc[pd.Timedelta(t0)] = 0
-                                    runoff_data = pd.concat([runoff_data.tail(1), runoff_data.head(len(runoff_data) - 1)])
-                                    runoff_data.sort_index()
-                                    # if the zero time from runoff series is before the first value of sediment series (should be)
-                                    if t0 < sediment_data.index[0]:
-                                        # New row to add
-                                        sediment_data.loc[pd.Timedelta(t0)] = 0
-                                        sediment_data = pd.concat(
-                                            [sediment_data.tail(1), sediment_data.head(len(sediment_data) - 1)])
-                                        sediment_data.sort_index()
-                                else:  # assign the runoff start time as t0
-                                    t0 = run.ttr
+                        # line_int.append(runoff_record.record_type.name[lang])
+                        # line_int.append(runoff_record.quality_index.name[lang] if runoff_record.quality_index is not None else no_data_value)
+                        # line_int.append(sed_conc_record.record_type.name[lang])
+                        # line_int.append(sed_conc_record.quality_index.name[lang] if sed_conc_record.quality_index is not None else no_data_value)
+                        prev_index = index
+                        i += 1
+                        # print(line_int)
+                        writeRowToCSV(output_csv, line+line_int)
+                    rdb.log(run.id, f"\n\tRun successfully exported.")
+                    print(run.get_notes(lang))
+                    num_runs_exported += 1
 
-                            # print(f"runoff data (record #{runoff_record.id}):\n{runoff_data}\n")
-                            # print(f"sediment data (record #{sed_conc_record.id}):\n{sed_conc_data}\n")
+                output_csv.close()
 
-                            # merge the dataframes into one with common 'time' index
-                            merged_data = pd.concat([runoff_data, sediment_data, rainfall_data], axis=1, join='outer')
-                            # re-order the rows by time
-                            try:
-                                merged_data.sort_index(inplace=True)
-                            except TypeError as e:
-                                print(
-                                    f"Incompatible indexes in input dataframes - one of input dataframes is not a timeline")
-
-                            # Limit the index to end at the last time point of the runoff or sediment data
-                            end_time = min(merged_data[runoff_label].last_valid_index(),
-                                           merged_data[sed_conc_label].last_valid_index())
-                            merged_data = merged_data.loc[:end_time]
-
-                            # cross-interpolate for the runoff and sediment concentration values
-                            merged_data[runoff_label] = merged_data[runoff_label].interpolate(method='linear')
-                            merged_data[sed_conc_label] = merged_data[sed_conc_label].interpolate(method='linear')
-
-                            # forward-fill the rainfall intensity data and fill any remaining sediment concentration gaps
-                            merged_data[rain_int_label] = merged_data[rain_int_label].ffill()
-                            merged_data[sed_conc_label] = merged_data[sed_conc_label].fillna(0)
-                            # calculate the sediment flux [g.min-1]
-                            merged_data[sed_flux_label] = merged_data[runoff_label] * merged_data[sed_conc_label]
-                            # print(f"runoff + sediment concentration rainfall + sediment flux:\n{merged_data}\n\n")
-                            # integrate rainfall data stepwise to [mm]
-                            integrate_data_series(merged_data, rain_int_label, rain_tot_label,
-                                                                  interpolate=False, time_unit='minutes')
-                            # integrate runoff data linearly to [l]
-                            integrate_data_series(merged_data, runoff_label, discharge_label, interpolate=True, time_unit='minutes')
-
-                            # integrate sediment flux to get total sediment yield in [g]
-                            integrate_data_series(merged_data, sed_flux_label, sed_yield_label, interpolate=True, time_unit='minutes')
-
-                            # print(merged_data[runoff_label])
-                            # print(merged_data[sed_conc_label])
-                            # print(merged_data[sed_flux_label])
-                            # print(merged_data[sed_yield_label])
-                            i = 1
-                            prev_index = None
-                            for index, row in merged_data.iterrows():
-                                line_int = []
-
-                                t1 = format_timedelta(index)
-                                # skip time intervals before runoff appeared
-                                if run.ttr > index:
-                                    continue
-                                t2 = format_timedelta(index - run.ttr)
-                                int_dur = format_timedelta(index-prev_index) if prev_index is not None else no_data_value
-
-                                line_int.append(i)
-                                line_int.append(int_dur)
-                                line_int.append(t1)
-                                line_int.append(t2)
-                                line_int.append(row[rain_tot_label])
-                                line_int.append(row[runoff_label])
-                                line_int.append((row[discharge_label]))
-                                line_int.append(row[sed_conc_label])
-                                line_int.append(row[sed_flux_label])
-                                line_int.append(row[sed_yield_label])
-
-                                # line_int.append(runoff_record.record_type.name[lang])
-                                # line_int.append(runoff_record.quality_index.name[lang] if runoff_record.quality_index is not None else no_data_value)
-                                # line_int.append(sed_conc_record.record_type.name[lang])
-                                # line_int.append(sed_conc_record.quality_index.name[lang] if sed_conc_record.quality_index is not None else no_data_value)
-                                prev_index = index
-                                i += 1
-                                # print(line_int)
-                                writeRowToCSV(output_csv, line+line_int)
-                        else:
-                            writeRowToCSV(output_csv, line + invalid_data)
-
-            output_csv.close()
-            rdb.save_log()
-
-            if len(invalid_record_ids) > 0:
-                print(f"\n\nUPDATE `record` set `is_timeline` = 1 WHERE `id` IN ({', '.join([str(rid) for rid in invalid_record_ids])})")
-
-        else:
-            print("No runs available within given limits.")
+                print(f"\nexported {num_runs_exported} runs of {num_runs_tot}")
+                print(f"{num_runs_empty} of which is empty")
+                #
+                # if len(invalid_record_ids) > 0:
+                #     print(f"\n\nUPDATE `record` set `is_timeline` = 1 WHERE `id` IN ({', '.join([str(rid) for rid in invalid_record_ids])})")
 
         return
 
@@ -532,7 +543,7 @@ class Miner:
                         line.append(run.get_initial_moisture_value() or no_data_value)
                         line.append(run.get_surface_cover_value() or no_data_value)
                         line.append(run.bbch or no_data_value)
-                        line.append(run.get_rainfall_intensity() or no_data_value)
+                        line.append(run.get_rainfall_intensity_value() or no_data_value)
                         line.append(run.ttr)
 
 
@@ -1236,7 +1247,7 @@ class Miner:
                 # go through the record type priority list and find the first matching Record
                 for record_type in self.ss_types_view_order:
                     # get the best sediment concentration measurement Record(s)
-                    found_records = run.get_records(2, [2, 3], record_type_id = record_type)
+                    found_records = run.get_records([2, 3], 2, record_type_id=record_type)
                     if found_records is not None:
                         if len(found_records) > 1:
                             print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
@@ -1359,299 +1370,223 @@ class Miner:
 
         return
 
+    def generate_overview_html(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", log_file=None, **kwargs):
+        """
+        Generates HTML overview of all simulations and all measurements, all assigned records
+        Each row in the output file represents a time interval in merged data of precipitation intensity, runoff rate, sediment concentration
+
+        :param output_path:
+        :param date_from:
+        :param date_to:
+        :param lang:
+        :param no_data_value:
+        :param log_file:
+        :return:
+        """
+        rdb = RunoffDB(log_file_path=log_file)
+        # the runs may not be loaded yet ...
+        if rdb.runs is None:
+            rdb.load_runs(date_from=date_from, date_to=date_to)
+
+        if not rdb.runs:
+            print("No runs available within given limits.")
+            return
+
+        else:
+            # construct the headers
+            headers = {"cz": ["ID simulace",
+                              "ID sekvence",
+                              "další simulace ve skupině",
+                              "ID lokality",
+                              "lokalita",
+                              "datum",
+                              "čas spuštění simulátoru",
+                              "ID simulátoru",
+                              "simulátor",
+                              "ID plochy",
+                              "název plochy",
+                              "délka plochy [m]",
+                              "ID plodiny",
+                              "plodina",
+                              "povrchový odtok začal",
+                              "začátek p.o.",
+                              "přiřazená srážka",
+                              "přiřazená počáteční vlhkost",
+                              "přiřazený surface cover",
+                              "hodnota bbch",
+                              "půdní vzorek objemová hmotnost",
+                              "typ přiřazení objemová hmotnost",
+                              "půdní vzorek zrnitost",
+                              "typ přiřazení zrnitost",
+                              "půdní vzorek Corg",
+                              "typ přiřazení Corg",
+                              ],
+                     "en": ["run ID",
+                            "sequence ID",
+                            "locality ID",
+                            "other runs in group"
+                            "locality",
+                            "date",
+                            "time of simulator start"
+                            "simulator ID",
+                            "simulator",
+                            "plot ID",
+                            "plot name",
+                            "plot length [m]",
+                            "crop ID",
+                            "crop",
+                            "surface runoff initiated",
+                            "time to runoff",
+                            "dedicated precipitation record",
+                            "dedicated initial moisture record",
+                            "dedicated surface cover record",
+                            "bbch value",
+                            "soil sample bulk density",
+                            "assignment type bulk density",
+                            "soil sample texture",
+                            "assignment type texture",
+                            "soil sample Corg",
+                            "assignment type Corg"]}
+
+
+            for uid, unit in rdb.units.items():
+                # append the unit name to appropriate header language
+                for ll in headers.keys():
+                    headers[ll].append(f"({uid}) {unit.name[ll]} [{unit.unit}]")
+
+            # open the output file for writing
+            output_html = open(output_path, "w", encoding="utf-8")
+            # write the HTML headers
+            writeHTMLheader(output_html, html_title="runs overview", lang=lang)
+
+            # start the table
+            output_html.write("<div>\n<table>\n")
+            # and write the column headers
+            writeRowToHTML(output_html, headers[lang], is_header=True)
+
+            for run in rdb.runs.values():
+                print()
+                # single row to be filled and written to the output files
+                # one line represents one time interval of a measured time series within a run
+                line = []
+
+                print(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}")
+                run_row = [run.id, run.sequence_id, len(run.load_group_brothers()),
+                             run.locality_id,
+                             run.locality.name,
+                             czech_date(run.datetime),
+                             run.datetime.strftime('%H:%M'),
+                             run.simulator_id,
+                             run.simulator.name[lang],
+                             run.plot_id,
+                             run.plot.name,
+                             f"{run.plot.plot_length:.1f}",
+                             run.crop_id,
+                             run.crop.name[lang]
+                             ]
+                run_row.append("1" if run.ttr else "0")
+                run_row.append(format_timedelta(run.ttr) if run.ttr else no_data_value)
+                run_row.append(run.rain_intensity_recid or no_data_value)
+                run_row.append(run.initmoist_recid or no_data_value)
+                run_row.append(run.surface_cover_recid or no_data_value)
+                run_row.append(run.bbch or no_data_value)
+                run_row.append(run.bulkd_ss_id or no_data_value)
+                run_row.append(run.bulkd_ss_asstype.description[lang] if run.bulkd_ss_asstype else "")
+                run_row.append(run.texture_ss_id or no_data_value)
+                run_row.append(run.texture_ss_asstype.description[lang] if run.texture_ss_asstype else "")
+                run_row.append(run.corg_ss_id or no_data_value)
+                run_row.append(run.corg_ss_asstype.description[lang] if run.corg_ss_asstype else "")
+
+                run_records = run.get_records()
+                # print(f"run_records: {', '.join([str(r) for r in run_records]) if run_records else 'None'}")
+
+                # check records for every unit in units table
+                for uid, unit in rdb.units.items():
+                    if run_records:
+                        rr = []
+                        for r in run_records:
+                            if r.unit_id == uid:
+                                rr.append(r)
+                        # run_row.append(len(rr))
+                        # print(f"{uid} rr: {', '.join([str(kr) for kr in rr]) if rr else 'None'}")
+                        run_row.append(", ".join([str(rrr.id) for rrr in rr]))
+
+                    else:
+                        run_row.append("")
+               # for ph in rdb.phenomena.values():
+
+                writeRowToHTML(output_html, run_row)
+
+            output_html.write("</table>\n</div>\n")
+            writeHTMLfooter(output_html)
+
+        return
 
 def sanitize_path(path_str):
     # Replace invalid characters for both Windows and Unix-like systems
     sanitized = re.sub(r'[<>:"/\\|?* ]', '_', path_str)
     return sanitized
-
-def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative = True, return_int = True, smallest_content = 1):
-    # ensure original_texture is a pandas DataFrame
-    if not isinstance(original_texture, pd.DataFrame):
-        raise TypeError("original_texture parameter value must be a pandas DataFrame")
-
-    # get column names from the input DataFrame
-    particle_size_col = original_texture.index.name
-
-    # extract original limits and cumulative contents from the DataFrame
-    original_limits = original_texture.index.to_list()
-    original_contents = original_texture[cum_mass_col_name].to_list()
-
-    # insert artificial first datapoint with the smallest content to allow for interpolation of smaller particles content
-    original_limits.insert(0, 0)
-    original_contents.insert(0, smallest_content)
-
-    # sort the new limits
-    new_limits = sorted(new_limits)
-
-    cumul_contents = []
-
-
-    for nl in new_limits:
-        i = 0
-        for ol, content in zip(original_limits, original_contents):
-            if i == 0:
-                prev_ol = ol
-                prev_content = content
-            else:
-                if nl > prev_ol and nl <= ol:
-                    new_value = prev_content + ((content - prev_content) / (ol - prev_ol)) * (nl - prev_ol)
-                    cumul_contents.append(new_value)
-                prev_ol = ol
-                prev_content = content
-            i += 1
-
-    # round the content values to integers if requested
-    if return_int:
-        cumul_contents = [round(val) for val in cumul_contents]
-
-    # recalculate cumulative values to net values if requested
-    if not return_cumulative:
-        net_contents = [cumul_contents[0]]
-        for j in range(1, len(cumul_contents)):
-            net_contents.append(cumul_contents[j] - cumul_contents[j - 1])
-        output_contents = net_contents
-    else:
-        output_contents = cumul_contents
-
-    # create the output DataFrame with the same column names as the input DataFrame
-
-    output_df = pd.DataFrame({
-        particle_size_col: new_limits,
-        cum_mass_col_name: output_contents
-    })
-
-    # set particle_size as the index
-    output_df.set_index(particle_size_col, inplace=True)
-
-    return output_df
-
-def get_zero_time(dataframe, series_name):
-    """
-    Finds the point in time when the dataframe intersects the x-axis (searches for timestamp where value == 0)
-
-    :param dataframe: time indexed dataframe
-    :return: the timestamp of zero value or None if impossible to be interpolated
-    """
-
-    # Ensure dataframe is time-indexed
-    if not isinstance(dataframe.index, pd.TimedeltaIndex):
-        raise ValueError("DataFrame index must be of type TimedeltaIndex.")
-
-
-    if dataframe.index.size > 1:
-        # check the direction of the first interval and break if extrapolation is not possible
-        if (dataframe[series_name].iloc[1] - dataframe[series_name].iloc[0]) == 0:
-            print("Zero time value couldn't be extrapolated because the value in first interval is constant.\n");
-            return None
-        elif (dataframe[series_name].iloc[1] - dataframe[series_name].iloc[0]) < 0:
-            print("Zero time value couldn't be extrapolated because the value in first interval is decreasing.\n")
-            return None
-        else:
-            # extrapolate the zero value time from the first two points in dataseries
-            t0 = dataframe[series_name].index[0]-((dataframe[series_name].iloc[0]*(dataframe[series_name].index[1]-dataframe[series_name].index[0]))/(dataframe[series_name].iloc[1]-dataframe[series_name].iloc[0]))
-            # if the zero time should negative (meaning that there was a value before the experiment start) it is set to 0
-            if t0 < pd.Timedelta(seconds=0):
-                t0 = pd.Timedelta(seconds=0)
-            return t0
-    else:
-        print ("Zero time value couldn't be extrapolated because the timeline doesn't have enough datapoints.\n")
-        return None
-
-def integrate_by_minutes(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True):
-    return integrate_by_time(df, series_name, start_time, end_time, zero_time, extrapolate, interpolate, 'minutes')
-
-def integrate_by_time(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True, time_unit='minutes'):
-    """
-    Calculate discrete time integral of selected 'series_name' from dataframe 'df' between 'start_time' and 'end_time'
-    'zero_time' (if set) or first datapoint is used if start_time is None
-    Last datapoint is used if end_time is None
-    Values between datapoints in source dataframe are linear interpolated if interpolate is True
-    Constant value between datapoints is assumed if interpolate is False
-    When end_time is after last datapoint in series and extrapolate is True then the en value is linear extrapolated from last interval's times and values
-    Assumes variable time steps in the index.
-
-    :param df: Input pandas DataFrame with timedelta index.
-    :param series_name: Series name to integrate.
-    :param start_time: Start timedelta for integration.
-    :param end_time: End timedelta for integration.
-    :param zero_time: optional starting time for integration
-    :param extrapolate: whether extrapolate after last point of time series
-    :param interpolate: whether to interpolate between points in time series, if False stepwise integration is performed (value considered constant in each time interval)
-    :param time_unit: unit of time to use for integration ('minutes', 'hours', 'seconds')
-
-    :returns: discrete time integral values.
-    """
-
-    # ensure dataframe is timedelta-indexed
-    if not isinstance(df.index, pd.TimedeltaIndex):
-        raise ValueError("DataFrame index must be of type TimedeltaIndex.")
-
-    time_conversion_factor = {
-        'seconds': 1,
-        'minutes': 60,
-        'hours': 3600
-    }
-
-    if time_unit not in time_conversion_factor:
-        raise ValueError("Invalid time unit. Allowed values are 'seconds', 'minutes', 'hours'.")
-
-    conversion_factor = time_conversion_factor[time_unit]
-
-    # set default start_time and end_time if None
-    if start_time is None:
-        start_time = zero_time if zero_time is not None else df.index[0]
-    if end_time is None:
-        end_time = df.index[-1]
-
-    output_value = 0
-    prev_time = None  # initialize prev_time with the first time index in the DataFrame
-    prev_value = None  # store the previous valid value (for NaN skipping)
-
-    for time in df.index:
-        # value = df.loc[time, series_name]
-        value = get_value_in_time(df, time, series_name, zero_time, extrapolate)
-        # handle NaN value at the beginning of the series
-        if pd.isna(value):
-            if prev_time is None:
-                value = 0  # if NaN is at the start, treat it as 0
-            else:
-                continue  # skip row if NaN appears after valid values
-
-        if prev_time is not None:
-            if prev_time >= start_time and time <= end_time:
-                # handle error if two consequent times are equal
-                if time == prev_time:
-                    print(f"\nError: two consequent times are equal at {time}. Skipping.")
-                    continue
-
-                time_diff = time - prev_time
-
-                # perform integration with interpolation or stepwise
-                if interpolate:
-                    output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
-                else:
-                    output_value += prev_value * time_diff.total_seconds() / conversion_factor
-
-            elif prev_time < start_time and time > start_time:
-                # handle the case when previous time is before start_time
-                time_diff = time - start_time
-                if interpolate:
-                    output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
-                else:
-                    output_value += prev_value * time_diff.total_seconds() / conversion_factor
-
-            elif prev_time < end_time and time > end_time:
-                # handle the case when current time exceeds end_time
-                time_diff = end_time - prev_time
-                if interpolate:
-                    output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
-                else:
-                    output_value += prev_value * time_diff.total_seconds() / conversion_factor
-
-        # update previous time and previous value
-        prev_time = time
-        prev_value = value
-    return output_value
-
-def integrate_data_series(df, series_name_in, series_name_out, interpolate=True, time_unit='minutes'):
-    """
-    Calculates discreet integral for all points of given 'series_name_in' from dataframe 'df' and stores the values in new series 'series_name_out'
-
-    :param df:
-    :param series_name_in: column name to process
-    :param series_name_out: column name for the output integrated series
-    :param interpolate: whether to interpolate between points in time series, if False stepwise integration is performed (value considered constant in each time interval)
-    :param time_unit: unit of time to use for integration ('minutes', 'hours', 'seconds')
-    :return:
-    """
-    # Ensure dataframe is time-indexed
-    if not isinstance(df.index, pd.TimedeltaIndex):
-        raise ValueError("DataFrame index must be of type TimedeltaIndex.")
-
-    output_values = []
-
-    for time in df.index:
-        integral_value = integrate_by_time(df, series_name_in,  pd.Timedelta(seconds=0), time, interpolate=interpolate, time_unit=time_unit)
-
-        # Store the integrated value
-        output_values.append(integral_value)
-    # Add the integrated values as a new column to the DataFrame
-    df[series_name_out] = output_values
-
-    return df
-
-def get_value_in_time(df, timedelta, series_name, zero_time=None, interpolate=True, extrapolate=None):
-    """
-    Returns interpolated value of dataseries in time specified as timedelta
-
-    :param timedelta: the time point at which to get the value
-    :param series_name: column name of the series to be interpolated
-    :param zero_time: presumed time of start of the series (value = 0)
-    :param extrapolate: range of extrapolation specified as a multiplier of the last interval
-    :param interpolate: whether to interpolate values if exact match not found
-    :returns: interpolated/extrapolated value if available based on specified inputs, otherwise None
-    """
-
-    # ensure dataframe is time-indexed
-    if not isinstance(df.index, pd.TimedeltaIndex):
-        raise ValueError("DataFrame index must be of type TimedeltaIndex.")
-
-    first_time = df.index[0]
-    last_time = df.index[-1]
-
-    # if timedelta is in the index, return the exact value directly
-    if timedelta in df.index:
-        return df.loc[timedelta, series_name]
-
-    # if timedelta is before the first value
-    if timedelta < first_time:
-        # if the zero time was specified, extrapolate to zero
-        if zero_time:
-            print(" - extrapolating to zero\n\n")
-            return (df.loc[first_time, series_name] / (first_time - zero_time).total_seconds()) * (timedelta - zero_time).total_seconds()
-        else:
-            print(f"Requested time is before the first record in '{series_name}' data series and extrapolation to zero was not requested.\n")
-            return None
-
-    # if time is after the last value
-    elif timedelta > last_time:
-        if extrapolate:
-            if df[series_name].size > 1:
-                # duration of last step in series
-                last_step_duration = df.index[-1] - df.index[-2]
-
-                # if the desired timedelta is within 'extrapolate' times last interval duration from series end
-                if (timedelta - df.index[-1]) < extrapolate * last_step_duration:
-                    print(" - extrapolating after series end\n")
-
-                    v1 = df.loc[df.index[-2], series_name]
-                    v2 = df.loc[df.index[-1], series_name]
-                    t1 = df.index[-2]
-                    t2 = df.index[-1]
-                    t3 = timedelta
-
-                    if (t3 - t2) < extrapolate * (t2 - t1):
-                        return v2 + (t3 - t2).total_seconds() * ((v2 - v1) / (t2 - t1).total_seconds())
-
-            else:
-                print(f"Data series '{series_name}' doesn't have enough values for extrapolation.\n")
-                return None
-        else:
-            print(f"Requested timedelta is after last record of '{series_name}' data series and extrapolation was not requested.\n")
-            return None
-
-    # interpolate the output value if `interpolate=True`
-    if interpolate:
-        # reindex the dataframe to include the requested timedelta
-        df_with_requested_time = df.reindex(df.index.union([timedelta]))
-        # use linear interpolation
-        interpolated_series = df_with_requested_time[series_name].interpolate(method='time')
-        # retrieve the interpolated value
-        interpolated_value = interpolated_series.loc[timedelta]
-        return interpolated_value
-    else:
-        return None
+#
+# def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative = True, return_int = True, smallest_content = 1):
+#     # ensure original_texture is a pandas DataFrame
+#     if not isinstance(original_texture, pd.DataFrame):
+#         raise TypeError("original_texture parameter value must be a pandas DataFrame")
+#
+#     # get column names from the input DataFrame
+#     particle_size_col = original_texture.index.name
+#
+#     # extract original limits and cumulative contents from the DataFrame
+#     original_limits = original_texture.index.to_list()
+#     original_contents = original_texture[cum_mass_col_name].to_list()
+#
+#     # insert artificial first datapoint with the smallest content to allow for interpolation of smaller particles content
+#     original_limits.insert(0, 0)
+#     original_contents.insert(0, smallest_content)
+#
+#     # sort the new limits
+#     new_limits = sorted(new_limits)
+#
+#     cumul_contents = []
+#
+#
+#     for nl in new_limits:
+#         i = 0
+#         for ol, content in zip(original_limits, original_contents):
+#             if i == 0:
+#                 prev_ol = ol
+#                 prev_content = content
+#             else:
+#                 if nl > prev_ol and nl <= ol:
+#                     new_value = prev_content + ((content - prev_content) / (ol - prev_ol)) * (nl - prev_ol)
+#                     cumul_contents.append(new_value)
+#                 prev_ol = ol
+#                 prev_content = content
+#             i += 1
+#
+#     # round the content values to integers if requested
+#     if return_int:
+#         cumul_contents = [round(val) for val in cumul_contents]
+#
+#     # recalculate cumulative values to net values if requested
+#     if not return_cumulative:
+#         net_contents = [cumul_contents[0]]
+#         for j in range(1, len(cumul_contents)):
+#             net_contents.append(cumul_contents[j] - cumul_contents[j - 1])
+#         output_contents = net_contents
+#     else:
+#         output_contents = cumul_contents
+#
+#     # create the output DataFrame with the same column names as the input DataFrame
+#
+#     output_df = pd.DataFrame({
+#         particle_size_col: new_limits,
+#         cum_mass_col_name: output_contents
+#     })
+#
+#     # set particle_size as the index
+#     output_df.set_index(particle_size_col, inplace=True)
+#
+#     return output_df
 
 # def plot_series_to_file(df, series_names, file_path, title=None, xlabel=None, ylabel=None, legend=True):
 #     """
@@ -1784,7 +1719,6 @@ def writeRowToHTML(fileref, towrite, is_header = False):
     for item in towrite:
         if is_header:
             linestring += f"<th>{item}</th>\n"
-
         else:
             if isinstance(item, float):
                 linestring += f"<td>{item:.3f}</td>\n"
@@ -1794,11 +1728,11 @@ def writeRowToHTML(fileref, towrite, is_header = False):
     fileref.write(linestring)
     return
 
-def writeHTMLheader(fileref):
-    towrite = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\" />\n"\
-    "<html xmlns = \"http://www.w3.org/1999/xhtml\" lang = \"cs\" xml: lang = \"cs\" />\n"\
+def writeHTMLheader(fileref, html_title=None, lang=None):
+    towrite = "<!DOCTYPE html>\n"\
+    f"<html xmlns = \"http://www.w3.org/1999/xhtml\" lang = \"{lang or 'en'}\">\n"\
     "<head> <meta http - equiv = \"Content-Type\" content = \"text/html; charset=utf8\" />\n"\
-    "<title> Runoff + sediment integration </title>\n"\
+    f"<title> {html_title or ''}</title>\n"\
     "<style>\n"\
     "html {\n\tbackground: # ddd;\n}\n\t" \
     "body {\n\tbackground: white;\n\twidth: 1200px;\n\tmargin: 0 auto;\n\tpadding: 5px 20px;\n\tfont: 'Arial';\n}\n\t" \
@@ -1819,13 +1753,20 @@ def writeHTMLheader(fileref):
     fileref.write(towrite)
     return
 
+def writeHTMLfooter(fileref):
+    towrite = "\n</body>\n<footer>\n</footer>\n</html>"
+    fileref.write(towrite)
+    return
+
 def format_timedelta(td):
     """Format a timedelta object by removing '0 days'."""
     if isinstance(td, pd.Timedelta):
         td_str = str(td)
         return td_str.replace('0 days ', '') if '0 days' in td_str else td_str
+    elif isinstance(td, timedelta):
+        return str(td)
     else:
-        raise ValueError(f"input value '{td}' is not a TimeDelta instance.")
+        raise ValueError(f"input value '{td}' is not a TimeDelta instance. ({type(td)})")
 
 def czech_date(datetime):
     return f"{datetime.strftime('%d. ').lstrip('0')} {datetime.strftime('%m. ').lstrip('0')} {datetime.strftime('%Y')}"
