@@ -6,6 +6,9 @@ import pandas as pd
 from datetime import datetime, time, date
 import numpy as np
 import json
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.ticker import MaxNLocator
 
 from src.db_access import DBconnector
 from src.exceptions import DataframeEmptyError, RecordSetNotComplete, DataframeNotTimeIndexed
@@ -39,6 +42,7 @@ class RunoffDB:
     projects_table = "`project`"
     projectlinks_table = "`sequence_project`"
     protection_measures_table = "`protection_measure`"
+    plot_protection_measures_table = "`plot_protection_measure`"
     quality_index_table = "quality_index"
     records_table = "`record`"
     record_types_table = "`record_type`"
@@ -97,7 +101,7 @@ class RunoffDB:
         # do not load the runs as they might be limited by filters
         self.runs = None
 
-        self.log_file = log_file_path
+        self.log_file_path = log_file_path
         self.run_log = {}
         print("\n... everything is ready.")
         print(80*"="+"\n")
@@ -119,28 +123,37 @@ class RunoffDB:
         :param text_to_log: text to append to the key
         :return: None
         """
-        if self.log_file is not None:
+        if self.log_file_path is not None:
             if run_id in self.run_log.keys():
                 self.run_log[run_id].append(text_to_log)
             else:
                 self.run_log[run_id] = [text_to_log]
         return
 
-    def save_log(self):
-        # save the log if requested on initialization and not empty
-        if self.log_file is not None and len(self.run_log) > 0:
-            print(f"\n\nlogging into '{self.log_file}'")
-            # delete the file if already exists
-            if os.path.isfile(self.log_file):
-                os.remove(self.log_file)
-            with open(self.log_file, "a") as f:
-                for run_id, logs in self.run_log.items():
-                    run = self.runs.get(run_id)
-                    f.write(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name['en']} - {run.run_type.name['en']}\n")
-                    for log in logs:
-                        f.write(f"\t{log} \n")
-                    f.write("\n")
+    def save_log(self, output_path=None):
+        output_path = output_path or self.log_file_path
+        if len(self.run_log) == 0:
+            print(f"nothing to logg ...")
+            return
+        if output_path is None:
+            print(f"logg file path not defined ...")
+            return
+
+        # delete the file if already exists
+        if os.path.isfile(output_path):
+            os.remove(output_path)
+        with open(output_path, "a") as f:
+            for run_id, logs in self.run_log.items():
+                run = self.runs.get(run_id)
+                f.write(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name['en']} - {run.run_type.name['en']}\n")
+                for log in logs:
+                    f.write(f"\t{log} \n")
+                f.write("\n")
+        print(f"log file saved to {output_path}")
         return
+
+    def clear_log(self):
+        self.run_log = {}
 
     def load_runs(self, limit=None, date_from=None, date_to=None, simulators=None, localities=None, crops=None):
         """
@@ -240,8 +253,10 @@ class RunoffDB:
                 for r in results:
                     new = Plot(self, **r)
                     plot_dict.update({new.id: new})
+
                 thecursor.close()
                 print(f"{len(plot_dict)} plots loaded")
+
                 return plot_dict
             return None
 
@@ -793,7 +808,7 @@ class Run:
                 return None
             else:
                 if crop_height_data is not None:
-                    return crop_height_data["plant_density"].mean()
+                    return crop_height_data["crop_height"].mean()
                 else:
                     self.runoffdb.log(self.id, f"plant density data of record {crop_height_rec.id} is None")
                     print(f"\tplant density data of record {crop_height_rec.id} is None")
@@ -1047,15 +1062,24 @@ class Run:
         :except: RecordSetNotComplete if requested record is not found for the run
         """
 
+
+        # default units
+        default_units = {
+            "runoff": 1, # in l.min-1
+            "sediment_concentration": 3, # in g.l-1
+            "rainfall_intensity": 6,# in mm.hour-1
+            "sediment_flux": 23, # in g.min-1
+            }
+
         # default labels map
         default_lables = {
-            "runoff": "runoff",
-            "sediment_concentration": "sediment concentration",
-            "rainfall_intensity": "rainfall intensity",
-            "rainfall_total": "rainfall total",
-            "discharge": "discharge",
-            "sediment_flux": "sediment flux",
-            "sediment_yield": "sediment yield"
+            "runoff": "runoff [l.s-1]",
+            "sediment_concentration": "sediment concentration [g.l-1]",
+            "rainfall_intensity": "rainfall intensity [mm.hour-1]",
+            "rainfall_total": "rainfall total [mm]",
+            "discharge": "discharge [l]",
+            "sediment_flux": "sediment flux [g.min-1]",
+            "sediment_yield": "sediment yield [g]"
         }
 
         # default interpolation map
@@ -1065,13 +1089,6 @@ class Run:
                 "rainfall_intensity": "ffill",
             }
 
-        # default units
-        default_units = {
-            "runoff": 1, # in l.min-1
-            "sediment_concentration": 3, # in g.l-1
-            "rainfall_intensity": 6,# in mm.hour-1
-            "sediment_flux": 23, # in g.min-1
-            }
 
         # get complete set of labels by adopting user input
         if not labels_map:
@@ -1145,12 +1162,12 @@ class Run:
             merged_data = pd.DataFrame()
 
         # add missing keys, so that the column count is constant
-        for key, label in labels_map.items():
+        for key, label in labels.items():
             if label not in merged_data.columns:
                 merged_data[label] = pd.NA
 
         # reorder columns according to labels_map
-        final_columns = [labels_map[k] for k in labels_map]
+        final_columns = [labels[k] for k in labels]
         merged_data = merged_data.reindex(columns=final_columns)
 
         # ensure merged index is a TimedeltaIndex
@@ -1314,6 +1331,94 @@ class Run:
         else:
             return None
 
+    def plot_hydro_data(self, df, output_path, series_to_plot=None):
+        """
+        Plot selected hydro-sediment data from get_best_hydro_data() and save to file.
+
+        Each data series gets its own Y-axis (stacked if needed).
+        Uses the timedelta index (in minutes) as X-axis.
+
+        Chart types per key:
+            rainfall_intensity: bar
+            rainfall_total: line
+            runoff: point
+            discharge: line
+            sediment_flux: line
+            sediment_yield: line
+
+        :param output_path: File path to save the plot (e.g., "output.png")
+        :param series_to_plot: Optional list of column names to include (default is all recognized ones)
+        """
+        default_chart_types = {
+            'rainfall_intensity': 'bar',
+            'rainfall_total': 'line',
+            'runoff': 'point',
+            'discharge': 'line',
+            'sediment_flux': 'line',
+            'sediment_yield': 'line'
+        }
+
+        if df is None or df.empty:
+            print("No hydro-sediment data available to plot.")
+            return
+
+        if not isinstance(df.index, pd.TimedeltaIndex):
+            raise ValueError("DataFrame index must be a TimedeltaIndex.")
+
+        available_columns = [c for c in default_chart_types if c in df.columns]
+
+        if series_to_plot is None:
+            columns = available_columns
+        else:
+            columns = [col for col in series_to_plot if col in available_columns]
+
+        if not columns:
+            print("No valid columns selected for plotting.")
+            return
+
+        fig, ax1 = plt.subplots(figsize=(14, 6))
+        base_ax = ax1
+        axes = [base_ax]
+        lines = []
+
+        # Create additional Y-axes if needed
+        for i in range(1, len(columns)):
+            new_ax = base_ax.twinx()
+            new_ax.spines.right.set_position(("axes", 1 + 0.1 * i))
+            axes.append(new_ax)
+
+        x_values = df.index.total_seconds() / 60  # X in minutes
+        color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+        for i, col in enumerate(columns):
+            ax = axes[i]
+            color = color_cycle[i % len(color_cycle)]
+            chart_type = default_chart_types.get(col, 'line')
+
+            if chart_type == 'bar':
+                bar_width = (x_values[1] - x_values[0]) if len(x_values) > 1 else 1
+                line = ax.bar(x_values, df[col], width=bar_width, label=col, color=color, alpha=0.6)
+            elif chart_type == 'point':
+                line, = ax.plot(x_values, df[col], 'o', label=col, color=color)
+            else:  # line
+                line, = ax.plot(x_values, df[col], label=col, color=color)
+
+            ax.set_ylabel(col, color=color)
+            ax.tick_params(axis='y', labelcolor=color)
+            lines.append(line)
+
+        base_ax.set_xlabel("Time [minutes]")
+        base_ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        base_ax.grid(True, which='both', axis='both', linestyle='--', alpha=0.4)
+
+        # Create a single combined legend
+        labels = [l.get_label() if hasattr(l, 'get_label') else l[0].get_label() for l in lines]
+        fig.legend(lines, labels, loc='upper right', bbox_to_anchor=(1, 1), bbox_transform=fig.transFigure)
+
+        plt.title("Hydro-Sediment Time Series")
+        plt.tight_layout()
+        fig.savefig(output_path)
+        plt.close(fig)
 
     def load_measurements(self):
         msrmsnts = None
@@ -1900,11 +2005,27 @@ class Plot:
         self.plot_width = kwargs.get("plot_width")
         self.plot_length = kwargs.get("plot_length")
         self.plot_slope = kwargs.get("plot_slope")
-        self.protection_measure_id = kwargs.get("protection_measure_id")
-        self.protection_measure = self.runoffdb.protection_measures[self.protection_measure_id] if self.protection_measure_id is not None else None
+        self.protection_measure_ids, self.protection_measures = self.get_protection_measures()
 
         self.note = {"cz": kwargs.get("note_cz"), "en": kwargs.get("note_en")}
 
+    def get_protection_measures(self):
+        with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
+            query = f"SELECT `protection_measure_id` FROM {self.runoffdb.plot_protection_measures_table} WHERE `plot_id` = {self.id}"
+            thecursor.execute(query)
+            results = thecursor.fetchall()
+
+            ids = []
+            measures = []
+            if thecursor.rowcount > 0:
+                for r in results:
+                    ids.append(r["protection_measure_id"])
+                    measures.append(self.runoffdb.protection_measures[r["protection_measure_id"]])
+                thecursor.close()
+        return ids, measures
+
+    def get_protection_measures_names(self, lang):
+        return ", ".join([m.name[lang] for m in self.protection_measures]) if self.protection_measures else ""
 
     def get_last_run_datetime(self):
         with self.runoffdb.dbcon.cursor() as thecursor:
@@ -2399,7 +2520,7 @@ def remove_last_zero_row(df):
     return df
 
 def czech_date(datetime):
-    return f"{datetime.strftime('%d.').strip('0')} {datetime.strftime('%m.').strip('0')} {datetime.strftime('%Y')}"
+    return f"{datetime.strftime('%d.').strip('0')}{datetime.strftime('%m.').strip('0')}{datetime.strftime('%Y')}"
 
 def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative = True, return_int = True, smallest_content = 1):
     # ensure original_texture is a pandas DataFrame

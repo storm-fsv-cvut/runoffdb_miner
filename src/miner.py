@@ -13,6 +13,7 @@ from pint import UnitRegistry
 from src.db_access import DBconnector
 from .entities import *
 from .entities import interpolate_texture, integrate_by_time, integrate_by_minutes, integrate_data_series, get_zero_time, get_value_in_time
+from .entities import czech_date
 
 
 lang = "en"
@@ -92,7 +93,7 @@ class Miner:
             return None
         return
 
-    def generate_structured_dump(self, root_path, date_from=None, date_to=None, lang="en"):
+    def generate_structured_dump(self, root_path, date_from=None, date_to=None, lang="en", no_data_value="NA"):
         try:
             os.mkdir(root_path) if not os.path.isdir(root_path) else None
         except OSError as error:
@@ -100,104 +101,153 @@ class Miner:
             print("Dump failed.")
             return
 
-        # create runoffDB instance
-        rdb = RunoffDB()
-        # get all dates when any simulation occurred
-        all_days = rdb.get_simulation_days(date_from, date_to)
-        print("\n")
+        # create RunoffDB instance
+        with RunoffDB() as rdb:
+            # get all dates when any simulation occurred
+            all_days = rdb.get_simulation_days(date_from, date_to)
+            print("\n")
 
-        for day_start in all_days:
-            day_end = day_start.replace(hour=23, minute=59, second=59)
-            # load runs of the day
-            day_runs = rdb.load_runs(date_from=day_start, date_to=day_end)
-            # no runs on day with simulations is a result of unfinished/messed-up record in DB (run group without any run)
-            if day_runs is not None:
-                day_dir = os.path.join(root_path, day_start.strftime('%Y-%m-%d'))
-                try:
-                    os.mkdir(day_dir)
-                except OSError as error:
-                   pass
-
-                for rid, run in day_runs.items():
-                    sim_dir_name = sanitize_path(f"{run.id}-{rdb.localities[run.locality_id].name}-{rdb.crops[run.crop_id].name[lang]}-{run.plot_id}-{rdb.run_types[run.run_type_id].name[lang]}")
-                    sim_dir = os.path.join(day_dir, sim_dir_name)
-                    print("\n"+80*"-")
-                    print(f"#{run.id} - {czech_date(day_start)} - {rdb.localities[run.locality_id].name} - {rdb.crops[run.crop_id].name[lang]} - {run.plot_id} - {rdb.run_types[run.run_type_id].name[lang]}")
-                    print(80 * "-")
+            for day_start in all_days:
+                day_end = day_start.replace(hour=23, minute=59, second=59)
+                # load runs of the day
+                day_runs = rdb.load_runs(date_from=day_start, date_to=day_end)
+                # no runs on day with simulations is a result of unfinished/messed-up entry in DB (run group without any run)
+                if day_runs is not None:
+                    day_dir = os.path.join(root_path, day_start.strftime('%Y-%m-%d'))
                     try:
-                        os.mkdir(sim_dir)
+                        os.mkdir(day_dir)
                     except OSError as error:
-                        pass
+                       pass
 
-                    # collect and save run metadata
-                    with open(os.path.join(sim_dir, sim_dir_name+".json"), "w") as f:
-                        json.dump(run.get_metadata(), f, ensure_ascii=False, indent=4)
+                    for rid, run in day_runs.items():
+                        sim_dir_name = sanitize_path(f"{run.id}-{rdb.localities[run.locality_id].name}-{rdb.crops[run.crop_id].name[lang]}-{run.plot_id}-{rdb.run_types[run.run_type_id].name[lang]}")
+                        sim_dir = os.path.join(day_dir, sim_dir_name)
+                        print("\n"+80*"-")
+                        print(f"#{run.id} - {czech_date(day_start)} - {rdb.localities[run.locality_id].name} - {rdb.crops[run.crop_id].name[lang]} - {run.plot_id} - {rdb.run_types[run.run_type_id].name[lang]}")
+                        print(80 * "-")
+                        try:
+                            os.mkdir(sim_dir)
+                        except OSError as error:
+                            pass
 
-                    # loop through all phenomena and if measurement exists go through it's records
-                    for phid in rdb.get_all_phenomena_ids():
-                        msrmnts = run.get_measurements(phid)
-                        if msrmnts is not None:
-                            for ms in msrmnts:
-                                # loop through units and if record exists export it
-                                for uid in rdb.get_all_units_ids():
-                                    rcrds = ms.get_records(phenomenon_id=uid)
-                                    if rcrds is not None:
-                                        recids = []
-                                        for rec in rcrds:
-                                            recids.append(rec.id)
-                                            if rec.record_type_id != 99:
-                                                # the dataframe is TimeDelta indexed if is_timeline attribute is True
-                                                index_column = "time" if rec.is_timeline else None
-                                                index = True if rec.is_timeline else False
-                                                # column_headers = ["time"] if rec.is_timeline else []
-                                                column_headers = []
-                                                rec_filename = sanitize_path(f"{rec.id}-{rec.unit.name[lang]}-[{rec.unit.unit}]")
+                        # collect and save run metadata
+                        with open(os.path.join(sim_dir, sim_dir_name+".json"), "w") as f:
+                            json.dump(run.get_metadata(), f, ensure_ascii=False, indent=4)
 
-                                                try:
-                                                    data_df = rec.get_data("value", index_column=index_column)
-                                                except DataframeEmptyError as e:
-                                                    print(f"\t{e.message}")
-                                                    print(f"rec_filename: {rec_filename}")
-                                                    print(f"sim_dir: {sim_dir}")
-                                                    with open(os.path.join(sim_dir, rec_filename+".csv"), "w") as f:
-                                                        f.write(e.message)
-                                                else:
-                                                    if data_df is not None:
+                        rdb.clear_log()
+                        run_log_path = os.path.join(sim_dir, "log.txt")
 
-                                                        column_headers.append(f"{rec.unit.name[lang]} [{rec.unit.unit}]")
-                                                        column_headers.append(f"{rec.unit_rel_x.name[lang]} [{rec.unit_rel_x.unit}]") if rec.related_value_x_unit_id is not None else None
-                                                        column_headers.append(f"{rec.unit_rel_y.name[lang]} [{rec.unit_rel_y.unit}]") if rec.related_value_y_unit_id is not None else None
-                                                        column_headers.append(f"{rec.unit_rel_z.name[lang]} [{rec.unit_rel_z.unit}]") if rec.related_value_z_unit_id is not None else None
+                        # loop through all phenomena and if measurement exists go through it's records
+                        for phid in rdb.get_all_phenomena_ids():
+                            msrmnts = run.get_measurements(phid)
+                            if msrmnts is not None:
+                                for ms in msrmnts:
+                                    # loop through units and if record exists export it
+                                    for uid in rdb.get_all_units_ids():
+                                        rcrds = ms.get_records(unit_id=uid)
+                                        if rcrds is not None:
+                                            recids = []
+                                            for rec in rcrds:
+                                                recids.append(rec.id)
+                                                if rec.record_type_id != 99:
+                                                    # the dataframe is TimeDelta indexed if is_timeline attribute is True
+                                                    index_column = "time" if rec.is_timeline else None
+                                                    index = True if rec.is_timeline else False
+                                                    # column_headers = ["time"] if rec.is_timeline else []
+                                                    column_headers = []
+                                                    rec_filename = sanitize_path(f"{rec.id}-{rec.unit.name[lang]}-[{rec.unit.unit}]")
 
-                                                        # format the TimeDelta index to desired format (get rid of the '0 days')
-                                                        if pd.api.types.is_timedelta64_dtype(data_df.index):
-                                                            data_df.index = data_df.index.map(lambda
-                                                                                        x: f"{x.components.hours:02}:{x.components.minutes:02}:{x.components.seconds:02}")
-
-                                                        print(f"#{rec.id}: {column_headers} ({rdb.record_types[rec.record_type_id].name[lang]})")
-
-                                                        # if ms.phenomenon_id == 16:
-                                                        #     print(data_df)
-
-                                                        # try:
-                                                        local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
-                                                        data_df.to_csv(os.path.join(sim_dir, rec_filename+".csv"),
-                                                                   index=index,
-                                                                   sep=local_seps["celld"][lang],
-                                                                   decimal=local_seps["decd"][lang],
-                                                                   header=column_headers)
-                                                        # except ValueError:
-                                                        #     print(data_df)
+                                                    try:
+                                                        data_df = rec.get_data("value", index_column=index_column)
+                                                    except DataframeEmptyError as e:
+                                                        print(f"\t{e.message}")
+                                                        print(f"rec_filename: {rec_filename}")
+                                                        print(f"sim_dir: {sim_dir}")
+                                                        with open(os.path.join(sim_dir, rec_filename+".csv"), "w") as f:
+                                                            f.write(e.message)
                                                     else:
-                                                        print(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
-                                                        with open(os.path.join(sim_dir, rec_filename+".csv", "w")) as f:
-                                                            f.write(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
-                                        # print(f"{phid} - {len(ms.records)} ({', '.join([str(rid) for rid in recids])})")
+                                                        if data_df is not None:
 
+                                                            column_headers.append(f"{rec.unit.name[lang]} [{rec.unit.unit}]")
+                                                            column_headers.append(f"{rec.unit_rel_x.name[lang]} [{rec.unit_rel_x.unit}]") if rec.related_value_x_unit_id is not None else None
+                                                            column_headers.append(f"{rec.unit_rel_y.name[lang]} [{rec.unit_rel_y.unit}]") if rec.related_value_y_unit_id is not None else None
+                                                            column_headers.append(f"{rec.unit_rel_z.name[lang]} [{rec.unit_rel_z.unit}]") if rec.related_value_z_unit_id is not None else None
 
+                                                            # format the TimeDelta index to desired format (get rid of the '0 days')
+                                                            if pd.api.types.is_timedelta64_dtype(data_df.index):
+                                                                data_df.index = data_df.index.map(lambda
+                                                                                            x: f"{x.components.hours:02}:{x.components.minutes:02}:{x.components.seconds:02}")
 
-            else:
-                print(f"\t{day_start.strftime('%Y-%m-%d')} skipped")
+                                                            print(f"#{rec.id}: {column_headers} ({rdb.record_types[rec.record_type_id].name[lang]})")
+
+                                                            # if ms.phenomenon_id == 16:
+                                                            #     print(data_df)
+
+                                                            # try:
+                                                            local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
+                                                            data_df.to_csv(os.path.join(sim_dir, rec_filename+".csv"),
+                                                                       index=index,
+                                                                       sep=local_seps["celld"][lang],
+                                                                       decimal=local_seps["decd"][lang],
+                                                                       header=column_headers)
+                                                            # except ValueError:
+                                                            #     print(data_df)
+                                                        else:
+                                                            print(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
+                                                            with open(os.path.join(sim_dir, rec_filename+".csv", "w")) as f:
+                                                                f.write(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
+                                            # print(f"{phid} - {len(ms.records)} ({', '.join([str(rid) for rid in recids])})")
+
+                                            # get DataFrame with all hydro-sediment data
+
+                                            rain_int_label = "rainfall intensity [mm.hour-1]"
+                                            rain_tot_label = "rainfall total [mm]"
+                                            runoff_label = "runoff [l.s-1]"
+                                            discharge_label = "discharge [l]"
+                                            sed_conc_label = "sediment concentration [g.l-1]"
+                                            sed_flux_label = "sediment flux [g.min-1]"
+                                            sed_yield_label = "sediment yield [g]"
+
+                                            labels = {
+                                                "rainfall_intensity": rain_int_label,
+                                                "rainfall_total": rain_tot_label,
+                                                "runoff": runoff_label,
+                                                "sediment_concentration": sed_conc_label,
+                                                "discharge": discharge_label,
+                                                "sediment_flux": sed_flux_label,
+                                                "sediment_yield": sed_yield_label
+                                            }
+                                            # all requests are False to get all runs
+                                            request = {key: False for key in labels}
+
+                                            try:
+                                                hydro_data = run.get_best_hydro_data(request_map=request,
+                                                                                     labels_map=labels)
+                                            except RecordSetNotComplete as e:
+                                                # if any of needed records is not available skip the run and log why
+                                                rdb.log(run.id,
+                                                        f"Following essential hydro-sediment records are not available: {', '.join([r for r in e.missing_records])}. "
+                                                        f"\n\t=> Run was excluded from the export.")
+                                            else:
+                                                # hydro_data.fillna(no_data_value, inplace=True)
+                                                # in case all hydro-sediment data are empty
+                                                if hydro_data.empty:
+                                                    rdb.log(run.id, f"\n\t=> Run has no hydro/sediment data.")
+
+                                                # print(hydro_data[rain_int_label])
+                                                # print(hydro_data[rain_tot_label])
+                                                # print(hydro_data[runoff_label])
+                                                # print(hydro_data[sed_conc_label])
+                                                # print(hydro_data[sed_flux_label])
+                                                # print(hydro_data[sed_yield_label])
+
+                                                print(hydro_data)
+                                                # print(hydro_data.index)
+                                                print(hydro_data.columns.tolist())
+                                                run.plot_hydro_data(hydro_data, os.path.join(sim_dir, "runoff.png"), [rain_int_label, rain_tot_label, runoff_label])
+                        rdb.save_log(run_log_path)
+                else:
+                    print(f"\t{day_start.strftime('%Y-%m-%d')} skipped")
         return
 
     def generate_html_overview(self, output_path, date_from=None, date_to=None):
@@ -231,7 +281,7 @@ class Miner:
         return
 
 
-    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", interpolate_zero_time=False, log_file=None, **kwargs):
+    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", log_file=None):
         """
         Generates runoff and sediment export for all simulation runs fitting into given limits.
         Each row in the output file represents a time interval in merged data of precipitation intensity, runoff rate, sediment concentration
@@ -317,7 +367,7 @@ class Miner:
                     line.append(run.plot.plot_slope)
                     line.append(run.plot.note[lang].replace(";", ".") if run.plot.note[lang] else no_data_value)
                     line.append(run.plot.days_since_seeding(run.datetime) or no_data_value)
-                    line.append(run.plot.protection_measure.name[lang] if run.plot.protection_measure is not None else no_data_value)
+                    line.append(run.plot.get_protection_measures_names(lang))
                     line.append(run.simulator.id)
                     line.append(run.simulator.name[lang])
                     line.append(run.crop_id if run.crop_id else no_data_value)
@@ -398,7 +448,7 @@ class Miner:
                     except RecordSetNotComplete as e:
                         # if any of needed records is not available skip the run and log why
                         rdb.log(run.id, f"Following essential hydro-sediment records are not available: {', '.join([r for r in e.missing_records])}. "
-                                        f"\n\tThe run was excluded from the export.")
+                                        f"\n\t=> Run was excluded from the export.")
                         continue
                     else:
                         hydro_data.fillna(no_data_value, inplace=True)
@@ -408,7 +458,7 @@ class Miner:
                             writeRowToCSV(output_csv, line + no_data_row)
                             num_runs_empty += 1
                             num_runs_exported += 1
-                            rdb.log(run.id, f"\n\tRun exported with no hydro/sediment data.")
+                            rdb.log(run.id, f"\n\t=> Run exported with no hydro/sediment data.")
                             continue
 
                     # print(hydro_data[rain_int_label])
@@ -449,14 +499,14 @@ class Miner:
                         i += 1
                         # print(line_int)
                         writeRowToCSV(output_csv, line+line_int)
-                    rdb.log(run.id, f"\n\tRun successfully exported.")
+                    rdb.log(run.id, f"\n\t=> Run successfully exported.")
                     print(run.get_notes(lang))
                     num_runs_exported += 1
 
                 output_csv.close()
 
                 print(f"\nexported {num_runs_exported} runs of {num_runs_tot}")
-                print(f"{num_runs_empty} of which is empty")
+                print(f"{num_runs_empty} of which is empty") if num_runs_empty > 0 else None
                 #
                 # if len(invalid_record_ids) > 0:
                 #     print(f"\n\nUPDATE `record` set `is_timeline` = 1 WHERE `id` IN ({', '.join([str(rid) for rid in invalid_record_ids])})")
@@ -1522,6 +1572,19 @@ class Miner:
 
         return
 
+    def show_plots_overview(self):
+        rdb = RunoffDB()
+
+        print(f"")
+        for id, plot in rdb.plots.items():
+            print(f"\n{id} - {plot.name}")
+            print(f"\testablished {czech_date(plot.established)}")
+            print(f"\tprotection measures :") if plot.protection_measures else None
+
+            for measure in plot.protection_measures:
+                print(f"\t\t{measure.id} - {measure.name['cz']}")
+        return
+
 def sanitize_path(path_str):
     # Replace invalid characters for both Windows and Unix-like systems
     sanitized = re.sub(r'[<>:"/\\|?* ]', '_', path_str)
@@ -1767,9 +1830,6 @@ def format_timedelta(td):
         return str(td)
     else:
         raise ValueError(f"input value '{td}' is not a TimeDelta instance. ({type(td)})")
-
-def czech_date(datetime):
-    return f"{datetime.strftime('%d. ').lstrip('0')} {datetime.strftime('%m. ').lstrip('0')} {datetime.strftime('%Y')}"
 
 def uka(data, depth = 0, ind = "."):
     """
