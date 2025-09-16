@@ -17,7 +17,19 @@ if __name__ == '__main__':
     print()
 
     with Miner() as miner:
+        # set the date limits for all miner actions
+        # miner.date_from = "2025-01-01"
+        miner.date_from = "2025-04-28"
+        # miner.date_to = "2025-12-31"
+        miner.date_to = "2025-04-28"
+
+        # miner.compare_discharge_calculation_methods(log_file=f"d:/Downloads/records_overview_{datetime.now().strftime('%Y%m%d')}_log.txt")
+        # miner.compare_discharge_calculation_methods(output_dir=f"d:/Downloads/discharge_calculation_comparison")
+        miner.calculate_SLR(log_file=f"d:/Downloads/finding_fallow_{datetime.now().strftime('%Y%m%d')}_log.txt")
+        # miner.show_methodics(lang=lang)
+        # miner.export_methodics("d:/Downloads/methods.json")
         # miner.show_plots_overview()
+        # miner.show_run_notes(lang=lang)
         # miner.generate_soilpulse_csv("d:/Downloads/runoffdb_excerpt.csv", date_from="2018-01-01", date_to="2022-12-31")
 
         # miner.generate_overview_html(f"d:/Downloads/runoffdb_overview_{datetime.now().strftime('%Y%m%d')}_{lang}.html",
@@ -28,7 +40,6 @@ if __name__ == '__main__':
 
 
         miner.generate_interval_values_csv(f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
-                                           date_from="1990-01-01",
                                            lang=lang,
                                            log_file=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_log.txt")
 
@@ -43,14 +54,12 @@ if __name__ == '__main__':
         #                                   date_to="2020-07-01",
         #                                   lang=lang)
 
-        # set the date limits for all miner actions
-        # miner.date_from = "2000-01-01"
-        # miner.date_from = "2020-04-08"
-        # miner.date_to = "2023-12-31"
+
         # miner.generate_euro_table("d:/Downloads/euro_export.csv")
 
     duration = datetime.now() - start_time
-    print(f"\n{80*'_'}\ntotal processing time: {duration}")
+    print(f"{80*'_'}\nfinished at {datetime.now().strftime('%H:%M:%S')}")
+    print(f"total processing time {duration}")
 
 
 

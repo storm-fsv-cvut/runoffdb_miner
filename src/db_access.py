@@ -27,14 +27,14 @@ class DBconnector:
             password=self.pwd
         )
 
-    def connect(self, pool_name = "rdb"):
+    def connect(self, pool_name="rdb_pool"):
         try:
             db_connection = mysql.connector.connect(
-                host = self.server,
-                user = self.username,
-                password = self.pwd,
-                database = self.db_name,
-                pool_name = pool_name
+                host=self.server,
+                user=self.username,
+                password=self.pwd,
+                database=self.db_name,
+                pool_name=pool_name
             )
         except mysql.connector.errors.InterfaceError as e:
             print("The RunoffDB database server is not accessible:")

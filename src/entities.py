@@ -28,10 +28,13 @@ class RunoffDB:
     crops_table = "`crop`"
     crop_types_table = "`crop_type`"
     data_table = "`data`"
+    instruments_table = "`instrument`"
     localities_table = "`locality`"
     measurements_table = "`measurement`"
     measurement_run_table = "`measurement_run`"
     measurement_soil_sample_table = "`measurement_soil_sample`"
+    methodics_table = "`methodics`"
+    methodics_processing_step_table = "`methodics_processing_step`"
     models_table = "`model`"
     operations_table = "`operation`"
     operation_intensities_table = "`operation_intensity`"
@@ -43,6 +46,8 @@ class RunoffDB:
     projectlinks_table = "`sequence_project`"
     protection_measures_table = "`protection_measure`"
     plot_protection_measures_table = "`plot_protection_measure`"
+    processing_step_table = "`processing_step`"
+    processing_step_instrument_table = "`processing_step_instrument`"
     quality_index_table = "quality_index"
     records_table = "`record`"
     record_types_table = "`record_type`"
@@ -73,7 +78,7 @@ class RunoffDB:
         print(80*"=")
         print("RunoffDB initialization ... ")
         print(80*"="+"\n")
-        self.dbcon = DBconnector().pool.get_connection()
+        self.dbcon = DBconnector()
         self.na_value = output_na_value
 
         # on initiation load all the entities that are used all the time
@@ -90,13 +95,12 @@ class RunoffDB:
         self.protection_measures = self.load_protection_measures()
         self.plots = self.load_plots()
         self.samples = self.load_samples()
+        self.methodics = self.load_methodics()
         self.projects = self.load_projects()
         self.phenomena = self.load_phenomena()
         self.record_types = self.load_record_types()
         self.quality_index = self.load_quality_index()
         self.assignment_types = self.load_assignment_types()
-        self.methodics = self.load_methodics()
-        self.instruments = self.load_instruments()
 
         # do not load the runs as they might be limited by filters
         self.runs = None
@@ -112,9 +116,9 @@ class RunoffDB:
     def __exit__(self, exc_type, exc_value, traceback):
         # write the log
         self.save_log()
-        # close database connection
-        if self.dbcon.is_connected():
-            self.dbcon.close()  # return DB connection to the pool
+
+    def get_connection(self):
+        return self.dbcon.pool.get_connection()
 
     def log(self, run_id, text_to_log):
         """
@@ -123,33 +127,33 @@ class RunoffDB:
         :param text_to_log: text to append to the key
         :return: None
         """
-        if self.log_file_path is not None:
-            if run_id in self.run_log.keys():
-                self.run_log[run_id].append(text_to_log)
-            else:
-                self.run_log[run_id] = [text_to_log]
+        if run_id not in self.run_log.keys():
+            self.run_log[run_id] = set()
+
+        self.run_log[run_id].add(text_to_log)
         return
 
     def save_log(self, output_path=None):
         output_path = output_path or self.log_file_path
-        if len(self.run_log) == 0:
-            print(f"nothing to logg ...")
+        if len(self.run_log) == 0 and output_path:
+            print(f"\nnothing to logg ...")
             return
-        if output_path is None:
-            print(f"logg file path not defined ...")
+        if len(self.run_log) > 0 and not output_path:
+            print(f"\nlogg file path not defined - can't save the log with {len(self.run_log)} entries")
             return
 
-        # delete the file if already exists
-        if os.path.isfile(output_path):
-            os.remove(output_path)
-        with open(output_path, "a") as f:
-            for run_id, logs in self.run_log.items():
-                run = self.runs.get(run_id)
-                f.write(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name['en']} - {run.run_type.name['en']}\n")
-                for log in logs:
-                    f.write(f"\t{log} \n")
-                f.write("\n")
-        print(f"log file saved to {output_path}")
+        if output_path:
+            # delete the file if already exists
+            if os.path.isfile(output_path):
+                os.remove(output_path)
+            with open(output_path, "a") as f:
+                for run_id, logs in self.run_log.items():
+                    run = self.runs.get(run_id)
+                    f.write(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name['en']} - {run.run_type.name['en']}\n")
+                    for log in logs:
+                        f.write(f"\t{log} \n")
+                    f.write("\n")
+            print(f"\nlog file saved to {output_path}")
         return
 
     def clear_log(self):
@@ -166,328 +170,402 @@ class RunoffDB:
         :param crops: load runs performed on a plot with given crop/s (list of crop IDs)
         :return:
         """
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # start of the query
-            query = f"SELECT {self.runs_table}.`id` AS run_id, " \
-                    f"{self.runs_table}.`runoff_start` AS ttr, " \
-                    f"{self.runs_table}.`init_moisture_id` AS initmoist_recid, " \
-                    f"{self.runs_table}.`surface_cover_id` AS surface_cover_recid, " \
-                    f"{self.runs_table}.`rain_intensity_id` AS rainfall_recid, " \
-                    f"{self.runs_table}.`soil_sample_bulk_id` AS bulkd_ss_id, " \
-                    f"{self.runs_table}.`bulk_assignment_type_id` AS bulkd_ss_asstype, " \
-                    f"{self.runs_table}.`soil_sample_texture_id` AS texture_ss_id, " \
-                    f"{self.runs_table}.`texture_assignment_type_id` AS texture_ss_asstype, " \
-                    f"{self.runs_table}.`soil_sample_corg_id` AS corg_ss_id, " \
-                    f"{self.runs_table}.`corg_assignment_type_id` AS corg_ss_asstype, " \
-                    f"{self.runs_table}.`crop_bbch` AS bbch, " \
-                    f"{self.runs_table}.`note_cz`, " \
-                    f"{self.runs_table}.`note_en`, " \
-                    f"{self.runs_table}.`crop_condition_cz`, " \
-                    f"{self.runs_table}.`crop_condition_en`, " \
-                    f"{self.run_groups_table}.`sequence_id` AS sequence_id, " \
-                    f"{self.run_groups_table}.`datetime` AS datetime, " \
-                    f"{self.sequences_table}.`simulator_id` AS simulator_id, " \
-                    f"{self.runs_table}.`run_group_id` AS run_group_id, " \
-                    f"{self.run_groups_table}.`run_type_id` AS run_type_id, " \
-                    f"{self.plots_table}.`locality_id` AS locality_id, " \
-                    f"{self.plots_table}.`id` AS plot_id, " \
-                    f"{self.plots_table}.`crop_id` AS crop_id, " \
-                    f"{self.crops_table}.`crop_type_id` AS crop_type_id " \
-                    f"FROM {self.runs_table} " \
-                    f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
-                    f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
-                    f"JOIN {self.plots_table} ON {self.runs_table}.`plot_id` = {self.plots_table}.`id` " \
-                    f"JOIN {self.crops_table} ON {self.plots_table}.`crop_id` = {self.crops_table}.`id` " \
-                    f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-            if date_from is not None:
-                query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
-            if date_to is not None:
-                query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
-            if simulators is not None:
-                query += f" AND {self.sequences_table}.`simulator_id` IN ({', '.join([str(s) for s in simulators])})"
-            if localities is not None:
-                query += f" AND {self.plots_table}.`locality_id` IN ({', '.join([str(s) for s in localities])})"
-            if crops is not None:
-                query += f" AND {self.runs_table}.`crop_id` IN ({', '.join([str(s) for s in crops])})"
-            # additional conditions
-            # query += f"AND `` = "
+        # convert everything to lists if not already
 
-            # end of the query
-            query += " ORDER BY `datetime` ASC"
+        if simulators is not None and not isinstance(simulators, list):
+            simulators = [simulators]
+        if localities is not None and not isinstance(localities, list):
+            localities = [localities]
+        if crops is not None and not isinstance(crops, list):
+            crops = [crops]
 
-            if limit:
-                query += f" LIMIT {limit}"
-            # print(query)
-            # execute the query and fetch the results
-            thecursor.execute(query)
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # start of the query
+                query = f"SELECT {self.runs_table}.`id` AS run_id, " \
+                        f"{self.runs_table}.`runoff_start` AS ttr, " \
+                        f"{self.runs_table}.`init_moisture_id` AS initmoist_recid, " \
+                        f"{self.runs_table}.`surface_cover_id` AS surface_cover_recid, " \
+                        f"{self.runs_table}.`rain_intensity_id` AS rainfall_recid, " \
+                        f"{self.runs_table}.`soil_sample_bulk_id` AS bulkd_ss_id, " \
+                        f"{self.runs_table}.`bulk_assignment_type_id` AS bulkd_ss_asstype, " \
+                        f"{self.runs_table}.`soil_sample_texture_id` AS texture_ss_id, " \
+                        f"{self.runs_table}.`texture_assignment_type_id` AS texture_ss_asstype, " \
+                        f"{self.runs_table}.`soil_sample_corg_id` AS corg_ss_id, " \
+                        f"{self.runs_table}.`corg_assignment_type_id` AS corg_ss_asstype, " \
+                        f"{self.runs_table}.`crop_bbch` AS bbch, " \
+                        f"{self.runs_table}.`note_cz`, " \
+                        f"{self.runs_table}.`note_en`, " \
+                        f"{self.runs_table}.`crop_condition_cz`, " \
+                        f"{self.runs_table}.`crop_condition_en`, " \
+                        f"{self.run_groups_table}.`sequence_id` AS sequence_id, " \
+                        f"{self.run_groups_table}.`datetime` AS datetime, " \
+                        f"{self.sequences_table}.`simulator_id` AS simulator_id, " \
+                        f"{self.runs_table}.`run_group_id` AS run_group_id, " \
+                        f"{self.run_groups_table}.`run_type_id` AS run_type_id, " \
+                        f"{self.plots_table}.`locality_id` AS locality_id, " \
+                        f"{self.plots_table}.`id` AS plot_id, " \
+                        f"{self.plots_table}.`crop_id` AS crop_id, " \
+                        f"{self.crops_table}.`crop_type_id` AS crop_type_id " \
+                        f"FROM {self.runs_table} " \
+                        f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
+                        f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
+                        f"JOIN {self.plots_table} ON {self.runs_table}.`plot_id` = {self.plots_table}.`id` " \
+                        f"JOIN {self.crops_table} ON {self.plots_table}.`crop_id` = {self.crops_table}.`id` " \
+                        f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
+                if date_from is not None:
+                    query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
+                if date_to is not None:
+                    query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
+                if simulators is not None:
+                    query += f" AND {self.sequences_table}.`simulator_id` IN ({', '.join([str(s) for s in simulators])})"
+                if localities is not None:
+                    query += f" AND {self.plots_table}.`locality_id` IN ({', '.join([str(s) for s in localities])})"
+                if crops is not None:
+                    query += f" AND {self.runs_table}.`crop_id` IN ({', '.join([str(s) for s in crops])})"
+                # additional conditions
+                # query += f"AND `` = "
 
-            results = thecursor.fetchall()
+                # end of the query
+                query += " ORDER BY `datetime` ASC"
 
-            run_dict = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new = Run(self, **r)
-                    new.plot = self.plots.get(new.plot_id)
-                    # new_run.show_details()
-                    run_dict.update({new.id: new})
-                thecursor.close()
-                self.runs = run_dict
-                return run_dict
+                if limit:
+                    query += f" LIMIT {limit}"
+                # print(query)
+                # execute the query and fetch the results
+                thecursor.execute(query)
+
+                results = thecursor.fetchall()
+
+                run_dict = {}
+                if thecursor.rowcount > 0:
+                    for r in results:
+                        new = Run(self, **r)
+                        new.plot = self.plots.get(new.plot_id)
+                        # new_run.show_details()
+                        run_dict.update({new.id: new})
+                    thecursor.close()
+                    self.runs = run_dict
+                    return run_dict
             return None
+
+    def get_runs(self, date_from=None, date_to=None, run_types=None, simulators=None, localities=None, crops=None, plots=None):
+        """
+        Returns filtered list of runs from own list of runs
+
+        :param date_from:
+        :param date_to:
+        :param run_types:
+        :param simulators:
+        :param localities:
+        :param crops:
+        :param plots:
+        :return:
+        """
+
+        # convert everything to lists if not already
+        if run_types is not None and not isinstance(run_types, list):
+            run_types = [run_types]
+        if simulators is not None and not isinstance(simulators, list):
+            simulators = [simulators]
+        if localities is not None and not isinstance(localities, list):
+            localities = [localities]
+        if crops is not None and not isinstance(crops, list):
+            crops = [crops]
+        if plots is not None and not isinstance(plots, list):
+            plots = [plots]
+
+        result = self.runs.values()
+
+        # filter by datetime range
+        if date_from is not None:
+            result = [r for r in result if r.datetime >= datetime.combine(date.fromisoformat(date_from), time(0, 0, 0))]
+        if date_to is not None:
+            result = [r for r in result if r.datetime <= datetime.combine(date.fromisoformat(date_to), time(23, 59, 59))]
+
+        # filter by categorical ids
+        if run_types is not None:
+            result = [r for r in result if r.run_type_id in run_types]
+        if simulators is not None:
+            result = [r for r in result if r.simulator_id in simulators]
+        if localities is not None:
+            result = [r for r in result if r.locality_id in localities]
+        if crops is not None:
+            result = [r for r in result if r.crop_id in crops]
+        if plots is not None:
+            result = [r for r in result if r.plot_id in plots]
+
+        return result
 
     def load_plots(self, id=None):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # start of the query
-            query = f"SELECT * FROM {self.plots_table}"
-            if id is not None:
-                query += f" WHERE `id` = {id}"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # start of the query
+                query = f"SELECT * FROM {self.plots_table}"
+                if id is not None:
+                    query += f" WHERE `id` = {id}"
 
-            query += " ORDER BY `id` ASC"
+                query += " ORDER BY `id` ASC"
 
-            # execute the query and fetch the results
-            thecursor.execute(query)
-            results = thecursor.fetchall()
+                # execute the query and fetch the results
+                thecursor.execute(query)
+                results = thecursor.fetchall()
 
-            plot_dict = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new = Plot(self, **r)
-                    plot_dict.update({new.id: new})
+                plot_dict = {}
+                if thecursor.rowcount > 0:
+                    for r in results:
+                        new = Plot(self, **r)
+                        plot_dict.update({new.id: new})
 
-                thecursor.close()
-                print(f"{len(plot_dict)} plots loaded")
+                    thecursor.close()
+                    print(f"plots loaded ({len(plot_dict)})")
 
-                return plot_dict
-            return None
+                    return plot_dict
+                return None
 
     def load_samples(self, id=None):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.soil_samples_table}"
-            if id is not None:
-                query += f" WHERE `id` = {id}"
-            query += " ORDER BY `id` ASC"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.soil_samples_table}"
+                if id is not None:
+                    query += f" WHERE `id` = {id}"
+                query += " ORDER BY `id` ASC"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
+                thecursor.execute(query)
+                results = thecursor.fetchall()
 
-            samples_dict = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new = SoilSample(self, **r)
-                    samples_dict.update({new.id: new})
-                thecursor.close()
-                print(f"{len(samples_dict)} soil samples loaded")
+                samples_dict = {}
+                if thecursor.rowcount > 0:
+                    for r in results:
+                        new = SoilSample(self, **r)
+                        samples_dict.update({new.id: new})
+                    thecursor.close()
+                    print(f"soil samples loaded ({len(samples_dict)})")
 
-                return samples_dict
+                    return samples_dict
 
-            return None
+                return None
 
     def load_simulators(self, id=None):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.simulators_table}"
-            if id is not None:
-                query += f" WHERE `id` = {id}"
-            query += " ORDER BY `id` ASC"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.simulators_table}"
+                if id is not None:
+                    query += f" WHERE `id` = {id}"
+                query += " ORDER BY `id` ASC"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                simulators = {}
-                for r in results:
-                    new = Simulator(self, **r)
-                    simulators.update({new.id: new})
-                print(f"{len(simulators)} simulators loaded")
-            thecursor.close()
-        return simulators
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    simulators = {}
+                    for r in results:
+                        new = Simulator(self, **r)
+                        simulators.update({new.id: new})
+                    print(f"simulators loaded ({len(simulators)})")
+                thecursor.close()
+            return simulators
 
     def load_organizations(self, id=None):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.organizations_table}"
-            if id is not None:
-                query += f" WHERE `id` = {id}"
-            query += " ORDER BY `id` ASC"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.organizations_table}"
+                if id is not None:
+                    query += f" WHERE `id` = {id}"
+                query += " ORDER BY `id` ASC"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                organizations = {}
-                for r in results:
-                    new = Organization(self, **r)
-                    organizations.update({new.id: new})
-                print(f"{len(organizations)} organizations loaded")
-            thecursor.close()
-        return organizations
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    organizations = {}
+                    for r in results:
+                        new = Organization(self, **r)
+                        organizations.update({new.id: new})
+                    print(f"organizations loaded ({len(organizations)})")
+                thecursor.close()
+            return organizations
 
     def load_localities(self, id=None):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.localities_table}"
-            if id is not None:
-                query += f" WHERE `id` = {id}"
-            query += " ORDER BY `id` ASC"
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                localities = {}
-                for r in results:
-                    new = Locality(self, **r)
-                    localities.update({new.id: new})
-            print(f"{len(localities)} localities loaded")
-            thecursor.close()
-        return localities
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.localities_table}"
+                if id is not None:
+                    query += f" WHERE `id` = {id}"
+                query += " ORDER BY `id` ASC"
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    localities = {}
+                    for r in results:
+                        new = Locality(self, **r)
+                        localities.update({new.id: new})
+                print(f"localities loaded ({len(localities)})")
+                thecursor.close()
+            return localities
 
     def load_run_types(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.run_types_table}"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.run_types_table}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
+                thecursor.execute(query)
+                results = thecursor.fetchall()
 
-            if thecursor.rowcount > 0:
-                run_types = {}
-                for r in results:
-                    new = RunType(**r)
-                    run_types.update({new.id: new})
-                print(f"run types loaded")
-            thecursor.close()
-        return run_types
+                if thecursor.rowcount > 0:
+                    run_types = {}
+                    for r in results:
+                        new = RunType(**r)
+                        run_types.update({new.id: new})
+                    print(f"run types loaded")
+                thecursor.close()
+            return run_types
 
 
     def load_crop_types(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.crop_types_table}"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.crop_types_table}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            crop_types = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new = CropType(**r)
-                    crop_types.update({new.id: new})
-            print(f"crop types loaded")
-            thecursor.close()
-        return crop_types
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                crop_types = {}
+                if thecursor.rowcount > 0:
+                    for r in results:
+                        new = CropType(**r)
+                        crop_types.update({new.id: new})
+                print(f"crop types loaded")
+                thecursor.close()
+            return crop_types
 
     def load_operation_types(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.operation_types_table}"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.operation_types_table}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
+                thecursor.execute(query)
+                results = thecursor.fetchall()
 
-            if thecursor.rowcount > 0:
-                op_types = {}
-                for r in results:
-                    new = OperationType(**r)
-                    op_types.update({new.id: new})
-                print(f"operation types loaded")
-            thecursor.close()
-        return op_types
+                if thecursor.rowcount > 0:
+                    op_types = {}
+                    for r in results:
+                        new = OperationType(**r)
+                        op_types.update({new.id: new})
+                    print(f"operation types loaded")
+                thecursor.close()
+            return op_types
 
     def load_operation_intensities(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.operation_intensities_table}"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.operation_intensities_table}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
+                thecursor.execute(query)
+                results = thecursor.fetchall()
 
-            if thecursor.rowcount > 0:
-                op_ints = {}
-                for r in results:
-                    new = OperationIntensity(**r)
-                    op_ints.update({new.id: new})
-                print(f"operation intensities loaded")
-            thecursor.close()
-        return op_ints
+                if thecursor.rowcount > 0:
+                    op_ints = {}
+                    for r in results:
+                        new = OperationIntensity(**r)
+                        op_ints.update({new.id: new})
+                    print(f"operation intensities loaded")
+                thecursor.close()
+            return op_ints
 
     def load_protection_measures(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.protection_measures_table}"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.protection_measures_table}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            out_dict = {}
-            if thecursor.rowcount > 0:
-                for r in results:
-                    new = ProtectionMeasure(**r)
-                    out_dict.update({new.id: new})
-            print(f"{len(out_dict)} soil protection measures loaded")
-            thecursor.close()
-        return out_dict
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                out_dict = {}
+                if thecursor.rowcount > 0:
+                    for r in results:
+                        new = ProtectionMeasure(**r)
+                        out_dict.update({new.id: new})
+                print(f"soil protection measures loaded ({len(out_dict)})")
+                thecursor.close()
+            return out_dict
 
     def load_units(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {self.units_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                units = {}
-                for r in results:
-                    new_unit = Unit(**r)
-                    units.update({new_unit.id: new_unit})
-            print(f"{len(units)} units loaded")
-            thecursor.close()
-        return units
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {self.units_table}")
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    units = {}
+                    for r in results:
+                        new_unit = Unit(**r)
+                        units.update({new_unit.id: new_unit})
+                print(f"units loaded ({len(units)})")
+                thecursor.close()
+            return units
 
     def load_projects(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {self.projects_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                projects = {}
-                for r in results:
-                    new_project = Project(**r)
-                    projects.update({new_project.id: new_project})
-            print(f"projects loaded")
-            thecursor.close()
-        return projects
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {self.projects_table}")
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    projects = {}
+                    for r in results:
+                        new_project = Project(**r)
+                        projects.update({new_project.id: new_project})
+                print(f"projects loaded")
+                thecursor.close()
+            return projects
 
     def load_crops(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {self.crops_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                crops = {}
-                for r in results:
-                    new_crop = Crop(self, **r)
-                    crops.update({new_crop.id: new_crop})
-            print(f"{len(crops)} crops loaded")
-            thecursor.close()
-        return crops
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {self.crops_table}")
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    crops = {}
+                    for r in results:
+                        new_crop = Crop(self, **r)
+                        crops.update({new_crop.id: new_crop})
+                print(f"crops loaded ({len(crops)})")
+                thecursor.close()
+            return crops
 
     def load_agrotechnologies(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {self.agrotechnologies_table}")
-            results = thecursor.fetchall()
-            if thecursor.rowcount > 0:
-                agrotechnologies = {}
-                for r in results:
-                    new_agt = Agrotechnology(self, **r)
-                    agrotechnologies.update({new_agt.id: new_agt})
-            print(f"{len(agrotechnologies)} agrotechnologies loaded")
-            thecursor.close()
-        return agrotechnologies
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {self.agrotechnologies_table}")
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    agrotechnologies = {}
+                    for r in results:
+                        new_agt = Agrotechnology(self, **r)
+                        agrotechnologies.update({new_agt.id: new_agt})
+                print(f"agrotechnologies loaded ({len(agrotechnologies)})")
+                thecursor.close()
+            return agrotechnologies
 
     def load_phenomena(self):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {self.phenomena_table}"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {self.phenomena_table}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
+                thecursor.execute(query)
+                results = thecursor.fetchall()
 
-            if thecursor.rowcount > 0:
-                phenomena = {}
-                for r in results:
-                    new = Phenomenon(**r)
-                    phenomena.update({new.id: new})
-                print(f"phenomena loaded")
-            thecursor.close()
-        return phenomena
+                if thecursor.rowcount > 0:
+                    phenomena = {}
+                    for r in results:
+                        new = Phenomenon(**r)
+                        phenomena.update({new.id: new})
+                    print(f"phenomena loaded")
+                thecursor.close()
+            return phenomena
 
     def load_record_types(self):
-            with self.dbcon.cursor(dictionary=True) as thecursor:
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
                 query = f"SELECT * FROM {self.record_types_table}"
 
                 thecursor.execute(query)
@@ -503,7 +581,8 @@ class RunoffDB:
             return record_types
 
     def load_quality_index(self):
-            with self.dbcon.cursor(dictionary=True) as thecursor:
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
                 query = f"SELECT * FROM {self.quality_index_table}"
 
                 thecursor.execute(query)
@@ -519,7 +598,8 @@ class RunoffDB:
             return quality_indices
 
     def load_assignment_types(self):
-            with self.dbcon.cursor(dictionary=True) as thecursor:
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
                 query = f"SELECT * FROM {self.assignmenttypes_table}"
 
                 thecursor.execute(query)
@@ -533,27 +613,39 @@ class RunoffDB:
                     print(f"assignment types loaded")
                 thecursor.close()
             return ats
+
     def load_methodics(self):
-        return
-    def load_instruments(self):
-        return
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {self.methodics_table}")
+                results = thecursor.fetchall()
+                if thecursor.rowcount > 0:
+                    methodics = {}
+                    for r in results:
+                        new = Method(self, **r)
+                        methodics.update({new.id: new})
+                print(f"methodics loaded ({len(methodics)})")
+                thecursor.close()
+            return methodics
 
     def load_record_by_id(self, record_id):
-        with self.dbcon.cursor(dictionary=True)as thecursor:
-            # start of the query
-            query = f"SELECT {self.records_table}.*, {self.measurements_table}.`phenomenon_id` AS phenomenon_id " \
-                    f"FROM {self.records_table} " \
-                    f"JOIN {self.measurements_table} ON {self.measurements_table}.`id` = {self.records_table}.`measurement_id` " \
-                    f"WHERE {self.records_table}.`id` = {record_id}"
-            # execute the query and fetch the results
-            thecursor.execute(query)
-            results = thecursor.fetchone()
-            thecursor.close()
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True)as thecursor:
+                # start of the query
+                query = f"SELECT {self.records_table}.*, {self.measurements_table}.`phenomenon_id` AS phenomenon_id " \
+                        f"FROM {self.records_table} " \
+                        f"JOIN {self.measurements_table} ON {self.measurements_table}.`id` = {self.records_table}.`measurement_id` " \
+                        f"WHERE {self.records_table}.`id` = {record_id}"
+                # execute the query and fetch the results
+                thecursor.execute(query)
+                results = thecursor.fetchone()
+                thecursor.close()
 
-            if len(results) > 0:
-                return Record(self, **results)
-            else:
-                return None
+                if len(results) > 0:
+                    return Record(self, **results)
+                else:
+                    return None
 
     def get_simulation_days(self, date_from=None, date_to=None):
         """
@@ -564,37 +656,37 @@ class RunoffDB:
         :return:
         """
 
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # start of the query
+                query = f"SELECT DISTINCT DATE({self.run_groups_table}.`datetime`) AS datetime " \
+                        f"FROM {self.runs_table} " \
+                        f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
+                        f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
+                        f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
+                if date_from is not None:
+                    query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
+                if date_to is not None:
+                    query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
 
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # start of the query
-            query = f"SELECT DISTINCT DATE({self.run_groups_table}.`datetime`) AS datetime " \
-                    f"FROM {self.runs_table} " \
-                    f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
-                    f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
-                    f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-            if date_from is not None:
-                query += f" AND {self.run_groups_table}.`datetime` > '{date_from}'"
-            if date_to is not None:
-                query += f" AND {self.run_groups_table}.`datetime` < '{date_to}'"
+                # end of the query
+                query += " ORDER BY `datetime` ASC"
 
-            # end of the query
-            query += " ORDER BY `datetime` ASC"
+                # execute the query and fetch the results
+                thecursor.execute(query)
 
-            # execute the query and fetch the results
-            thecursor.execute(query)
-
-            results = thecursor.fetchall()
-            thecursor.close()
-            sim_days = []
-            if len(results) > 0:
-                for r in results:
-                    # create start of the day (00:00:00)
-                    the_day = r['datetime']
-                    the_day = datetime.combine(the_day, time(0, 0, 0))
-                    # the_day.replace(hour=0, minute=0, second=0)
-                    sim_days.append(the_day)
-                return sim_days
-            return None
+                results = thecursor.fetchall()
+                thecursor.close()
+                sim_days = []
+                if len(results) > 0:
+                    for r in results:
+                        # create start of the day (00:00:00)
+                        the_day = r['datetime']
+                        the_day = datetime.combine(the_day, time(0, 0, 0))
+                        # the_day.replace(hour=0, minute=0, second=0)
+                        sim_days.append(the_day)
+                    return sim_days
+                return None
 
     def show_agrotechnologies(self):
         for id, agt in self.agrotechnologies.items():
@@ -608,26 +700,35 @@ class RunoffDB:
             print(str(loc))
         return
 
+    def show_run_records(self, lang="en", indent=0):
+        """
+
+        """
+        for run in self.runs.values():
+            run.show_records(lang=lang, indent=indent)
+        return
+
     def load_sequence_ids_by_date(self, datetime):
-        with self.dbcon.cursor(dictionary=True) as thecursor:
-            # start of the query
-            query = f"SELECT {self.runs_table}.`id` AS run_id, " \
-                    f"{self.run_groups_table}.`id` AS group_id, " \
-                    f"{self.run_groups_table}.`sequence_id` AS sequence_id " \
-                    f"FROM {self.runs_table} " \
-                    f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
-                    f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
-                    f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) " \
-                    f"AND {self.run_groups_table}.`datetime` = '{datetime}'"
+        with self.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # start of the query
+                query = f"SELECT {self.runs_table}.`id` AS run_id, " \
+                        f"{self.run_groups_table}.`id` AS group_id, " \
+                        f"{self.run_groups_table}.`sequence_id` AS sequence_id " \
+                        f"FROM {self.runs_table} " \
+                        f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
+                        f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
+                        f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) " \
+                        f"AND {self.run_groups_table}.`datetime` = '{datetime}'"
 
-            # execute the query and fetch the results
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
+                # execute the query and fetch the results
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
 
-            if len(results) > 0:
-                return results
-            return None
+                if len(results) > 0:
+                    return results
+                return None
 
     def get_all_phenomena_ids(self):
         return [k for k in self.phenomena.keys()]
@@ -638,6 +739,16 @@ class RunoffDB:
     def get_all_quality_indexes(self):
         return [k for k in self.quality_index.keys()]
 
+    def find_orphan_records(self):
+        return
+    def find_orphan_measurements(self):
+        return
+
+    def export_methodics(self, lang="en"):
+        export = {}
+        for meth in self.methodics.values():
+            export.update(meth.export_to_json(lang))
+        return export
 
 class Run:
     def __init__(self, runoffdb, **kwargs):
@@ -712,22 +823,39 @@ class Run:
         print(f"{indent}surface cover record: {self.surface_cover_recid}")
         print("\n")
 
+    def show_records(self, lang="en", indent=0):
+        print("\n"+indent*"\t"+f"#{self.id} - {czech_date(self.datetime)} - {self.locality.name}")
+
+        all_records = self.get_records()
+        if all_records:
+            for rec in all_records:
+                # rec.show_units(lang=lang, indent=indent+1)
+                rec.show_details()
+        else:
+            print(f"\tno records at all")
+        return
+
     def load_group_brothers(self):
-        with self.runoffdb.dbcon.cursor() as thecursor:
-            # execute the query and fetch the results
-            query = f"SELECT `run`.`id` FROM {RunoffDB.runs_table} WHERE `run_group_id` = {self.run_group_id}"
+        """
+        Returns a list of IDs of simulation runs from the same group
+        :return:
+        """
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor() as thecursor:
+                # execute the query and fetch the results
+                query = f"SELECT `run`.`id` FROM {RunoffDB.runs_table} WHERE `run_group_id` = {self.run_group_id}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
 
-            if len(results) > 0:
-                brothers = []
-                for r in results:
-                    if r[0] != self.id:
-                        brothers.append(r[0])
-                return brothers
-            return None
+                if len(results) > 0:
+                    brothers = []
+                    for r in results:
+                        if r[0] != self.id:
+                            brothers.append(r[0])
+                    return brothers
+                return None
 
     def get_initial_moisture_value(self, multi_value=False):
         if self.initmoist_recid:
@@ -888,7 +1016,10 @@ class Run:
     def get_total_rainfall(self):
         raise NotImplementedError("Run object method 'get_total_rainfall()' is not implemented yet")
 
-    def get_best_record_of_unit(self, unit_id, phenomenon_id=None, view_order=None):
+    def get_best_record_of_unit(self, unit_id, phenomenon_id=None, view_order=None,
+                                related_value_x_unit_id=None,
+                                related_value_y_unit_id=None,
+                                related_value_z_unit_id=None):
         """
         Returns record of specified unit/units that is 'best' according to specified (or default) record types view order
         Record with best (lowest) quality index is return if more than one record is retrieved from the DB.
@@ -898,15 +1029,15 @@ class Run:
         :param view_order:
         :return:
         """
+
         # use the default view order if not specified
         view_order = view_order if view_order is not None else self.runoffdb.default_view_order
         # search for records of unit
         # go through the record type priority list and find the first matching Record
         for record_type in view_order:
-            # ignore "missing record" type
-            if record_type != 99:
-                # get records of current type
-                found_records = self.get_records(unit_id, phenomenon_id, record_type)
+            # get records of current type
+            found_records = self.get_records(unit_id, phenomenon_id, record_type, related_value_x_unit_id, related_value_y_unit_id, related_value_z_unit_id)
+            if found_records is not None:
                 if found_records is not None:
                     for qi in self.runoffdb.get_all_quality_indexes() + [None]:
                         # list records of this quality
@@ -920,12 +1051,13 @@ class Run:
                         if len(rq) > 0:
                             if len(rq) > 1:
                                 print(
-                                    f"\tMultiple records of type {rec.record_type.name['en']} and quality index {qi} were found for run #{self.id}:\n"
-                                    f"{', '.join([str(r.id) for r in rq])}"
-                                    f"\tFirst of them will be used for processing (record id {rq[0].id}).")
+                                    f"\tMultiple records of unit {unit_id}, type '{self.runoffdb.record_types[record_type].name['en']}' and quality index {qi} were found for run #{self.id}:\n"
+                                    f"\t{', '.join([str(r.id) for r in rq])} - first of them will be used for processing (record id {rq[0].id}).\n")
+
+                                self.runoffdb.log(self.id, f"multiple records of type '{self.runoffdb.record_types[record_type].name['en']}' and quality index {qi} were found for unit #{unit_id}: "
+                                    f"{', '.join([str(r.id) for r in rq])}")
                             return rq[0]
 
-        # print(f"\trun #{self.id} has no records of phenomenon id {phenomenon_id} and unit id {unit_id}.")
         return None
 
     def get_best_rainfall_record(self, view_order=None):
@@ -1061,7 +1193,6 @@ class Run:
         :return: pandas DataFrame with requested data.
         :except: RecordSetNotComplete if requested record is not found for the run
         """
-
 
         # default units
         default_units = {
@@ -1308,7 +1439,14 @@ class Run:
                     raise ValueError(f"Unsupported interpolation method: {method} for column {column}")
         return df
 
-    def get_records(self, unit_id=None, phenomenon_id=None, record_type_id=None):
+    def get_records(self, unit_id=None,
+                    phenomenon_id=None,
+                    record_type_id=None,
+                    related_value_x_unit_id=None,
+                    related_value_y_unit_id=None,
+                    related_value_z_unit_id=None,
+                    exclude_missing_records=False):
+
         out = []
         # get the measurements related to Run instance, pass on the argument
         measurements = self.get_measurements(phenomenon_id)
@@ -1317,17 +1455,14 @@ class Run:
             for meas in measurements:
                 # load the records of measurement, pass on the arguments
                 # records of all unit IDs are in the obtained list if unit is a list
-                recs = meas.get_records(unit_id, record_type_id)
+                recs = meas.get_records(unit_id, record_type_id, related_value_x_unit_id, related_value_y_unit_id, related_value_z_unit_id, exclude_missing_records)
 
                 # if any records like that exist
                 if recs:
                     out.extend(recs)
-                else:
-                    return None
-            if len(out) > 0:
-                return out
-            else:
-                return None
+
+            # return None if the out list is empty
+            return out or None
         else:
             return None
 
@@ -1422,23 +1557,24 @@ class Run:
 
     def load_measurements(self):
         msrmsnts = None
-        with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT * FROM {RunoffDB.measurements_table} " \
-                    f"JOIN {RunoffDB.measurement_run_table} ON {RunoffDB.measurement_run_table}.`measurement_id` = {RunoffDB.measurements_table}.`id` " \
-                    f"WHERE {RunoffDB.measurement_run_table}.`run_id` = {self.id}"
-            # print(query)
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT * FROM {RunoffDB.measurements_table} " \
+                        f"JOIN {RunoffDB.measurement_run_table} ON {RunoffDB.measurement_run_table}.`measurement_id` = {RunoffDB.measurements_table}.`id` " \
+                        f"WHERE {RunoffDB.measurement_run_table}.`run_id` = {self.id}"
+                # print(query)
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
 
-            if len(results) == 0:
-                # print(f"\tNo measurement found for run {self.id}")
-                return {}
-            else:
-                msrmsnts = {}
-                for res in results:
-                    new_measurement = Measurement(self.runoffdb, **res)
-                    msrmsnts.update({new_measurement.id: new_measurement})
+                if len(results) == 0:
+                    # print(f"\tNo measurement found for run {self.id}")
+                    return {}
+                else:
+                    msrmsnts = {}
+                    for res in results:
+                        new_measurement = Measurement(self.runoffdb, **res)
+                        msrmsnts.update({new_measurement.id: new_measurement})
         return msrmsnts
 
     def get_measurements(self, phenomenon_id=None):
@@ -1465,18 +1601,19 @@ class Run:
 
     def get_project_ids(self):
         ids = None
-        with self.runoffdb.dbcon.cursor() as thecursor:
-            # execute the query and fetch the results
-            query = f"SELECT `project_id` FROM `sequence_project` WHERE `sequence_id` = {self.sequence_id}"
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor() as thecursor:
+                # execute the query and fetch the results
+                query = f"SELECT `project_id` FROM `sequence_project` WHERE `sequence_id` = {self.sequence_id}"
 
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
 
-            if len(results)> 0:
-                ids = []
-                for r in results:
-                    ids.append(r[0])
+                if len(results)> 0:
+                    ids = []
+                    for r in results:
+                        ids.append(r[0])
         return ids
 
 
@@ -1535,11 +1672,31 @@ class Run:
 
     def get_notes(self, lang="en"):
         notes = {}
-        notes["plot"] = "NA"
+        if self.plot.get_notes(lang=lang):
+            notes["plot"] = self.plot.get_notes(lang=lang)
         notes["sequence"] = "NA"
-        notes["measurements"] = [m.get_notes(lang) for m in self.get_measurements()]
+        if self.get_measurements():
+            mnotes = [m.get_notes(lang) for m in self.get_measurements() if m.get_notes(lang)]
+            if mnotes:
+                notes["measurements"] = mnotes
 
         return notes
+
+    def find_fellow_fallow(self):
+        """
+        Attempts to find the reference fallow simulation for the Run
+        (another run executed at the same day at the same location with same simulator)
+        :return:
+        """
+        fallow_crop_id = 1
+
+        return self.runoffdb.get_runs(date_from=self.datetime.strftime("%Y-%m-%d"),
+                               date_to=self.datetime.strftime("%Y-%m-%d"),
+                               localities=self.locality_id,
+                               simulators=self.simulator_id,
+                               crops=fallow_crop_id,
+                               run_types=self.run_type_id
+                                )
 
 class Measurement:
     def __init__(self, runoffdb, **kwargs):
@@ -1587,28 +1744,61 @@ class Measurement:
 
 
     def load_records(self):
-        with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT {self.runoffdb.records_table}.*, {self.runoffdb.measurements_table}.`phenomenon_id` AS phenomenon_id " \
-                    f"FROM {self.runoffdb.records_table} " \
-                    f"JOIN {self.runoffdb.measurements_table} ON {self.runoffdb.measurements_table}.`id` = {self.runoffdb.records_table}.`measurement_id` " \
-                    f"WHERE `measurement_id` = {self.id}"
-            # print(query)
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
+        """
+        TODO: THIS METHOD NEEDS TO BE ADJUSTED AFTER THE TARGET-SOURCE BUG IS REPAIRED IN THE DATABASE
+        :return:
+        """
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"""
+                    SELECT r.*,
+                           m.`phenomenon_id` AS phenomenon_id,
+                           GROUP_CONCAT(rr.record_target) AS source_ids
+                    FROM {self.runoffdb.records_table} r
+                    JOIN {self.runoffdb.measurements_table} m
+                         ON m.`id` = r.`measurement_id`
+                    LEFT JOIN {self.runoffdb.record_record_table} rr
+                         ON rr.record_source = r.`id`
+                    WHERE r.`measurement_id` = {self.id}
+                    GROUP BY r.`id`
+                """
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
 
-            if len(results) == 0:
-                # print(f"\tNo record found for measurement {self.id}")
-                return []
-            else:
-                rcrds = []
-                for r in results:
-                    new = Record(self.runoffdb, **r)
-                    rcrds.append(new)
-                self.records = rcrds
-                return rcrds
+                if len(results) == 0:
+                    return []
+                else:
+                    rcrds = []
+                    for r in results:
+                        # parse source_ids into a Python list
+                        if r["source_ids"] is None:
+                            r["source_ids"] = []
+                        else:
+                            r["source_ids"] = [int(x) for x in r["source_ids"].split(",") if x]
 
-    def get_records(self, unit_id=None, record_type_id=None):
+                        new = Record(self.runoffdb, **r)
+                        rcrds.append(new)
+                    self.records = rcrds
+                    return rcrds
+
+    def get_records(self,
+                    unit_id=None,
+                    record_type_id=None,
+                    related_value_x_unit_id=None,
+                    related_value_y_unit_id=None,
+                    related_value_z_unit_id=None,
+                    exclude_missing_records=False):
+        """
+        The core method to obtain records.
+
+        :param unit_id: main unit of the record to be found
+        :param record_type_id: the record type to be found
+        :param related_value_x_unit_id: related value X unit id
+        :param related_value_y_unit_id: related value Y unit id
+        :param related_value_z_unit_id: related value Z unit id
+        :return:
+        """
         if self.records is not None:
             out = []
             # print(f"requested unit_id: {unit_id}, record_type: {record_type_id}")
@@ -1628,23 +1818,29 @@ class Measurement:
                     else:
                         if rec.unit_id == unit_id:
                             if not record_type_id:
-                                out.append(rec)
+                                if exclude_missing_records and rec.record_type_id == 99:
+                                    continue
+                                else:
+                                    out.append(rec)
                             else:
                                 if rec.record_type_id == record_type_id:
                                     out.append(rec)
 
-            if len(out) == 0:
-                # add = "" if not record_type_id  else f" and record type id {record_type_id}"
-                # print(f"measurement {self.id} has no record of unit id {unit_id}{add}.")
-                return None
-            else:
-                # print(f"returning: {'; '.join([str(o) for o in out])}")
-                return out
+            # filter by the related values units
+            if related_value_x_unit_id is not None:
+                out = [o for o in out if o.related_value_x_unit_id == related_value_x_unit_id]
+            if related_value_y_unit_id is not None:
+                out = [o for o in out if o.related_value_y_unit_id == related_value_y_unit_id]
+            if related_value_z_unit_id is not None:
+                out = [o for o in out if o.related_value_z_unit_id == related_value_z_unit_id]
+
+            # return None if the resulting list should be empty
+            return out or None
         else:
             # the records were not loaded yet, try loading them
             self.records = self.load_records()
             if self.records:
-                return self.get_records(unit_id, record_type_id)
+                return self.get_records(unit_id, record_type_id, related_value_x_unit_id, related_value_y_unit_id, related_value_z_unit_id)
             else:
                 return None
 
@@ -1670,8 +1866,17 @@ class Measurement:
         return meta
 
     def get_notes(self, lang="en"):
-        notes = {self.id: self.note[lang],
-                 "records": {r.id: r.get_notes(lang) for r in self.get_records()} if self.get_records() else "no records"}
+        notes = {}
+        if self.note[lang]:
+            notes[self.id] = self.note[lang]
+            if self.get_records():
+                rnotes = {}
+                for r in self.get_records():
+                    if r.get_notes(lang):
+                        rnotes[r.id] = r.get_notes(lang)
+
+                if len(rnotes) > 0:
+                    notes["records"] = rnotes
         return notes
 
 class Record:
@@ -1696,6 +1901,9 @@ class Record:
         self.quality_index_id = kwargs.get("quality_index_id")
         self.quality_index = self.runoffdb.quality_index[self.quality_index_id ] if self.quality_index_id is not None else None
         self.is_timeline = kwargs.get("is_timeline")
+        self.source_ids = kwargs.get("source_ids")
+        self.methodics_id = kwargs.get("methodics_id")
+        self.methodics = self.runoffdb.methodics[self.methodics_id ] if self.methodics_id is not None else None
 
         self.note_cz = kwargs.get("note_cz")
         self.note_en = kwargs.get("note_en")
@@ -1714,24 +1922,40 @@ class Record:
             self.multiplier_to_SI = None
 
     def __str__(self):
-        return f"record #{self.id}, unit #{self.unit_id}, record type {self.record_type_id}, quality index {self.quality_index_id}"
+        string = f"record #{self.id}: unit #{self.unit_id}, record type {self.record_type_id}, quality index {self.quality_index_id}"
+        string += f", related value x unit #{self.related_value_x_unit_id}" if self.related_value_x_unit_id else ""
+        string += f", related value y unit #{self.related_value_y_unit_id}" if self.related_value_y_unit_id else ""
+        string += f", related value z unit #{self.related_value_z_unit_id}" if self.related_value_z_unit_id else ""
 
-    def show_details(self, indent="", t=". "):
+        return string
+
+    def show_details(self, indent="", t=". ", lang="en"):
         indent += t
-        print(indent+f"record_id: {self.id}")
+        print("\n"+indent+f"record_id: {self.id}")
         indent += t
-        print(indent+f"record_type_id: {self.record_type_id}")
-        print(indent+f"unit_id: {self.unit_id}")
+        print(indent+f"record_type_id: {self.record_type_id} ({self.runoffdb.record_types[self.record_type_id].name[lang]})")
+        print(indent+f"unit_id: {self.unit_id} ({self.unit.name[lang]} [{self.unit.unit}])")
         if self.related_value_x_unit_id:
-            print(indent+f"related_value_x_unit_id: {self.related_value_x_unit_id}")
+            print(indent+f"related_value_x_unit_id: {self.related_value_x_unit_id} ({self.unit_rel_x.name[lang]} [{self.unit_rel_x.unit}])")
         if self.related_value_y_unit_id:
-            print(indent+f"related_value_y_unit_id: {self.related_value_y_unit_id}")
+            print(indent+f"related_value_y_unit_id: {self.related_value_y_unit_id} ({self.unit_rel_y.name[lang]} [{self.unit_rel_y.unit}])")
         if self.related_value_z_unit_id:
-            print(indent+f"related_value_z_unit_id: {self.related_value_z_unit_id}")
+            print(indent+f"related_value_z_unit_id: {self.related_value_z_unit_id} ({self.unit_rel_z.name[lang]} [{self.unit_rel_z.unit}])")
         if self.quality_index_id:
-            print(indent+f"quality_index_id: {self.quality_index_id}")
-        print(indent+f"is_timeline: {self.is_timeline}")
+            print(indent+f"quality_index_id: {self.quality_index_id} ({self.runoffdb.quality_index[self.quality_index_id].name[lang]})")
+        print(indent+f"is_timeline: {'yes' if self.is_timeline else 'no'}")
 
+        if self.source_ids:
+            print(indent+f"source records: {', '.join([str(sr) for sr in self.source_ids])}")
+
+        return
+
+    def show_units(self, lang="en", indent=0):
+        con = '-' if self.is_timeline else u"\u00B7"
+        print(indent*"\t"+f"{self.unit_id} {con} {self.unit.name[lang]} [{self.unit.unit}]")
+        print(indent*"\t"+f"\tx: {self.related_value_x_unit_id} - {self.unit_rel_x.name[lang]} [{self.unit_rel_x.unit}]") if self.related_value_x_unit_id else None
+        print(indent*"\t"+f"\ty: {self.related_value_y_unit_id} - {self.unit_rel_y.name[lang]} [{self.unit_rel_y.unit}]") if self.related_value_y_unit_id else None
+        print(indent*"\t"+f"\tz: {self.related_value_z_unit_id} - {self.unit_rel_z.name[lang]} [{self.unit_rel_z.unit}]") if self.related_value_z_unit_id else None
         return
 
     def load_data(self, value_name, related_x=None, related_y=None, related_z=None, index_column=None, order_by=None):
@@ -1767,20 +1991,23 @@ class Record:
 
         select_time = "`time`, " if self.is_timeline else ""
         query = f"SELECT {select_time}`value` AS {value_name} {more} FROM {RunoffDB.data_table} WHERE `record_id` = {self.id}{order_by}"
-        result_dataFrame = pd.read_sql(query, self.runoffdb.dbcon)
 
-        if self.is_timeline and index_column is None:
-            result_dataFrame.set_index('time', inplace=True)
-        elif index_column is not None:
-            result_dataFrame.set_index(index_column, inplace=True)
 
-        if not result_dataFrame.empty:
-            self.data = result_dataFrame
-        else:
-            raise DataframeEmptyError(value_name, self.id)
-        return result_dataFrame
 
-    def get_data(self, value_name="value", index_column=None, remove_last_zero=False, demand_timeline=False):
+        with self.runoffdb.get_connection() as dbcon:
+            result_dataFrame = pd.read_sql(query, dbcon)
+            if self.is_timeline and index_column is None:
+                result_dataFrame.set_index('time', inplace=True)
+            elif index_column is not None:
+                result_dataFrame.set_index(index_column, inplace=True)
+
+            if not result_dataFrame.empty:
+                self.data = result_dataFrame
+            else:
+                raise DataframeEmptyError(value_name, self.id)
+            return result_dataFrame
+
+    def get_data(self, value_name="value", related_x="rel_value_x", related_y="rel_value_y", related_z="rel_value_z", index_column=None, remove_last_zero=False, demand_timeline=False):
         """
         Return self.data if there were any data loaded.
         Tries loading the data if self.data is None.
@@ -1802,13 +2029,13 @@ class Record:
         else:
             # the data may not be loaded yet
             try:
-                self.load_data(value_name=value_name, index_column=index_column)
+                self.load_data(value_name=value_name, related_x=related_x, related_y=related_y, related_z=related_z, index_column=index_column)
             except DataframeEmptyError:
                 raise
 
-            return self.get_data(value_name, index_column, remove_last_zero, demand_timeline)
+            return self.get_data(value_name, related_x, related_y, related_z, index_column, remove_last_zero, demand_timeline)
 
-    def get_data_in_unit(self, target_unit_id, value_name="value", remove_last_zero=False, output_column_label=None, demand_timeline=False):
+    def get_data_in_unit(self, target_unit_id, value_name="value", related_x="rel_value_x", related_y="rel_value_y", related_z="rel_value_z", index_column=None, remove_last_zero=False, demand_timeline=False, output_column_label=None):
         """
         Return self.data with 'value' multiplied by the unit's multiplier to SI (if there were any data loaded).
         Tries loading the data if self.data is None.
@@ -1816,7 +2043,7 @@ class Record:
         :return: pandas Dataframe object with data loaded from DB or None if the self.data is empty, values in SI units
         """
         try:
-            self.get_data(value_name, demand_timeline=demand_timeline)
+            self.get_data(value_name, related_x, related_y, related_z,  index_column, remove_last_zero, demand_timeline)
         except DataframeEmptyError:
             raise
 
@@ -1845,21 +2072,8 @@ class Record:
         else:
             return None
 
-    def get_source_records(self):
-        with self.runoffdb.dbcon.cursor() as thecursor:
-            # start of the query
-            query = f"SELECT `record_target` FROM {self.runoffdb.record_record_table} WHERE `record_source` = {self.id}"
-            # execute the query and fetch the results
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
-
-            parents = []
-            if len(results) > 0:
-                for r in results:
-                    parents.append(r[0])
-                return parents
-            return None
+    # def get_source_records(self):
+    #     return self.runoffdb.get_record_source_records(self)
 
     def get_metadata(self, lang="en"):
         meta = {"record ID": self.id,
@@ -2010,36 +2224,38 @@ class Plot:
         self.note = {"cz": kwargs.get("note_cz"), "en": kwargs.get("note_en")}
 
     def get_protection_measures(self):
-        with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
-            query = f"SELECT `protection_measure_id` FROM {self.runoffdb.plot_protection_measures_table} WHERE `plot_id` = {self.id}"
-            thecursor.execute(query)
-            results = thecursor.fetchall()
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                query = f"SELECT `protection_measure_id` FROM {self.runoffdb.plot_protection_measures_table} WHERE `plot_id` = {self.id}"
+                thecursor.execute(query)
+                results = thecursor.fetchall()
 
-            ids = []
-            measures = []
-            if thecursor.rowcount > 0:
-                for r in results:
-                    ids.append(r["protection_measure_id"])
-                    measures.append(self.runoffdb.protection_measures[r["protection_measure_id"]])
-                thecursor.close()
-        return ids, measures
+                ids = []
+                measures = []
+                if thecursor.rowcount > 0:
+                    for r in results:
+                        ids.append(r["protection_measure_id"])
+                        measures.append(self.runoffdb.protection_measures[r["protection_measure_id"]])
+                    thecursor.close()
+            return ids, measures
 
     def get_protection_measures_names(self, lang):
         return ", ".join([m.name[lang] for m in self.protection_measures]) if self.protection_measures else ""
 
     def get_last_run_datetime(self):
-        with self.runoffdb.dbcon.cursor() as thecursor:
-            query = f"SELECT max(`datetime`) FROM `run_group` JOIN `run` ON `run`.`run_group_id` = `run_group`.`id` " \
-                    f"WHERE `run`.`plot_id` = {self.id}"
-            # execute the query and fetch the results
-            thecursor.execute(query)
-            results = thecursor.fetchone()
-            thecursor.close()
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor() as thecursor:
+                query = f"SELECT max(`datetime`) FROM `run_group` JOIN `run` ON `run`.`run_group_id` = `run_group`.`id` " \
+                        f"WHERE `run`.`plot_id` = {self.id}"
+                # execute the query and fetch the results
+                thecursor.execute(query)
+                results = thecursor.fetchone()
+                thecursor.close()
 
-            if len(results) > 0:
-                return results[0]
+                if len(results) > 0:
+                    return results[0]
 
-        return None
+            return None
 
     def days_since_seeding(self, datetime):
         # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
@@ -2064,19 +2280,20 @@ class Plot:
                 return None
 
     def get_runs_on_plot(self):
-        with self.runoffdb.dbcon.cursor() as thecursor:
-            query = f"SELECT `id` FROM `run` WHERE `plot_id` = {self.id}"
-            # execute the query and fetch the results
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor() as thecursor:
+                query = f"SELECT `id` FROM `run` WHERE `plot_id` = {self.id}"
+                # execute the query and fetch the results
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
 
-            if len(results) > 0:
-                run_list = []
-                for res in results:
-                    run_list.append(res[0])
-                return run_list
-        return []
+                if len(results) > 0:
+                    run_list = []
+                    for res in results:
+                        run_list.append(res[0])
+                    return run_list
+            return []
 
     def get_metadata(self, lang="en"):
         meta = {"plot ID": self.id,
@@ -2092,6 +2309,8 @@ class Plot:
             meta.update({"soil origin locality": self.runoffdb.localities[self.soil_origin_locality_id].name})
         return meta
 
+    def get_notes(self, lang="en"):
+        return self.note[lang]
 class Crop:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -2127,18 +2346,19 @@ class Agrotechnology:
     @classmethod
     def load_all_operations(cls, runoffdb):
         print("loading tillage operations to establish agrotechnologies ...\n")
-        with runoffdb.dbcon.cursor(dictionary=True) as thecursor:
-            # execute the query and fetch the results
-            thecursor.execute(f"SELECT * FROM {RunoffDB.operations_table}")
-            results = thecursor.fetchall()
-            thecursor.close()
-            if len(results) > 0:
-                operations = {}
-                for r in results:
-                    new = Operation(runoffdb, **r)
-                    operations.update({new.id: new})
-            Agrotechnology.operations = operations
-            print(f"{len(operations)} agrotechnical operations successfully loaded")
+        with runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {RunoffDB.operations_table}")
+                results = thecursor.fetchall()
+                thecursor.close()
+                if len(results) > 0:
+                    operations = {}
+                    for r in results:
+                        new = Operation(runoffdb, **r)
+                        operations.update({new.id: new})
+                Agrotechnology.operations = operations
+                print(f"agrotechnical operations loaded ({len(operations)})")
 
         return operations
 
@@ -2166,22 +2386,23 @@ class Agrotechnology:
         self.operation_sequence = self.load_operation_sequence()
 
     def load_operation_sequence(self):
-        with self.runoffdb.dbcon.cursor(dictionary=True) as thecursor:
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
 
-            query = f"SELECT `operation_id`, `date` FROM {RunoffDB.tillageseq_table} WHERE `agrotechnology_id` = {self.id}"
-            # print(query)
-            thecursor.execute(query)
-            results = thecursor.fetchall()
-            thecursor.close()
+                query = f"SELECT `operation_id`, `date` FROM {RunoffDB.tillageseq_table} WHERE `agrotechnology_id` = {self.id}"
+                # print(query)
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
 
-            if len(results) == 0:
-                print(f"\tno tillage sequence entry found for agrotechnology ID {self.id}")
-                return {}
-            else:
-                sequence = {}
-                for r in results:
-                    sequence.update({r["date"]: Agrotechnology.operations.get(r["operation_id"])})
-                return sequence
+                if len(results) == 0:
+                    print(f"\tno tillage sequence entry found for agrotechnology ID {self.id}")
+                    return {}
+                else:
+                    sequence = {}
+                    for r in results:
+                        sequence.update({r["date"]: Agrotechnology.operations.get(r["operation_id"])})
+                    return sequence
 
     def get_maximum_disturbance_level(self):
         if self.operation_sequence is None or self.operation_sequence == {}:
@@ -2475,6 +2696,103 @@ class AssignmentType:
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
 class Method:
+
+    processing_steps = None
+    instruments = None
+
+    @classmethod
+    def load_all_processing_steps(cls, runoffdb):
+        with runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {RunoffDB.processing_step_table}")
+                results = thecursor.fetchall()
+                thecursor.close()
+                if len(results) > 0:
+                    steps = {}
+                    for r in results:
+                        new = ProcessingStep(runoffdb, **r)
+                        steps.update({new.id: new})
+                Method.processing_steps = steps
+            return steps
+
+    @classmethod
+    def load_all_instruments(cls, runoffdb):
+        with runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+                # execute the query and fetch the results
+                thecursor.execute(f"SELECT * FROM {RunoffDB.instruments_table}")
+                results = thecursor.fetchall()
+                thecursor.close()
+                if len(results) > 0:
+                    instruments = {}
+                    for r in results:
+                        new = Instrument(runoffdb, **r)
+                        instruments.update({new.id: new})
+                Method.instruments = instruments
+            return instruments
+
+    def __init__(self, runoffdb, **kwargs):
+        self.runoffdb = runoffdb
+
+        # the first Method instance induces the DB load of all processing steps and instruments
+        if self.instruments is None:
+            Method.load_all_instruments(runoffdb)
+        if self.processing_steps is None:
+            Method.load_all_processing_steps(runoffdb)
+
+        self.id = kwargs["id"]
+        self.name_cz = kwargs["name_cz"]
+        self.name_en = kwargs["name_en"]
+        self.description_cz = kwargs.get("description_cz")
+        self.description_en = kwargs.get("description_en")
+        self.processing_steps_sequence = self.get_processing_steps_sequence() # ordered list of processing steps included in the method
+        # self.instruments_map = {} # mapping local indexes to instrument class instances
+
+        self.name = {"cz": self.name_cz, "en": self.name_en}
+        self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def get_processing_steps_sequence(self):
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+
+                query = f"SELECT `processing_step_id`, `sort` FROM {RunoffDB.methodics_processing_step_table} WHERE `methodics_id` = {self.id} ORDER BY `sort` ASC"
+                # print(query)
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
+
+                if len(results) == 0:
+                    print(f"\tno processing steps found for methodics ID {self.id}")
+                    return []
+                else:
+                    sequence = []
+                    for r in results:
+                        sequence.append(Method.processing_steps.get(r["processing_step_id"]))
+                    return sequence
+
+    def show_details(self, lang="en", indent=""):
+        print(f"Methodics {self.id} - {self.name[lang]}")
+        print(f"{self.description[lang]}")
+        print(f"\nprocessing steps:")
+        for i, prs in enumerate(self.processing_steps_sequence, start=1):
+            print(f"\t{i}")
+            prs.show_details(lang, indent)
+
+    def export_to_json(self, lang="en", include_ids=False):
+        export = {}
+        if include_ids:
+            export["id"] = self.id
+        export["name"] = self.name[lang]
+        export["description"] = self.description[lang] if self.description[lang] else "NA"
+        steps = {}
+        for i, ps in enumerate(self.processing_steps_sequence, start=1):
+            steps.update({i:ps.export_to_json(lang, include_ids)})
+        # export["processing steps"] = [ps.export_to_json(lang, include_ids) for ps in self.processing_steps_sequence]
+        export["processing steps"] = steps
+        return export
+
+class ProcessingStep:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
 
@@ -2483,13 +2801,48 @@ class Method:
         self.name_en = kwargs["name_en"]
         self.description_cz = kwargs.get("description_cz")
         self.description_en = kwargs.get("description_en")
-        self.process_steps = [] # ordered list of processing steps included in the measurement method
-        self.instruments_map = {} # mapping local indexes to instrument class instances
+        self.link = kwargs.get("link")
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+        self.instruments = self.get_instruments()
 
+    def get_instruments(self):
+        with self.runoffdb.get_connection() as dbcon:
+            with dbcon.cursor(dictionary=True) as thecursor:
+
+                query = f"SELECT `instrument_id` FROM {RunoffDB.processing_step_instrument_table} WHERE `processing_step_id` = {self.id}"
+                # print(query)
+                thecursor.execute(query)
+                results = thecursor.fetchall()
+                thecursor.close()
+
+                if len(results) == 0:
+                    return []
+                else:
+                    instruments = []
+                    for r in results:
+                        instruments.append(Method.instruments.get(r["instrument_id"]))
+                    return instruments
+
+    def show_details(self, lang="en", indent=""):
+        indent += "\t"
+        print(f"{indent}{self.name[lang]}")
+        print(f"{indent}{self.description[lang]}") if self.description[lang] else None
+        if self.instruments:
+            print(f"\n{indent}instruments used:")
+            for instr in self.instruments:
+                instr.show_details(lang, indent)
+        print("\n")
+    def export_to_json(self, lang="en", include_ids=False):
+        export = {}
+        if include_ids:
+            export["id"] = self.id
+        export["name"] = self.name[lang]
+        export["description"] = self.description[lang] if self.description[lang] else "NA"
+        export["instruments"] = [instr.export_to_json(lang, include_ids) for instr in self.instruments]
+        return export
 
 class Instrument:
     def __init__(self, runoffdb, **kwargs):
@@ -2500,13 +2853,23 @@ class Instrument:
         self.name_en = kwargs["name_en"]
         self.description_cz = kwargs.get("description_cz")
         self.description_en = kwargs.get("description_en")
+        self.link = kwargs.get("link")
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def show_details(self, lang="en", indent=""):
+        indent += "\t"
+        print(f"{indent}{self.name[lang]} - {self.description[lang]}")
 
+    def export_to_json(self, lang="en", include_ids=False):
+        export = {}
+        if include_ids:
+            export["id"] = self.id
+        export["name"] = self.name[lang]
+        export["description"] = self.description[lang] if self.description[lang] else "NA"
 
-
+        return export
 def remove_last_zero_row(df):
     """
     Removes last row of a dataframe if value is equal to 0
@@ -2620,98 +2983,6 @@ def get_zero_time(dataframe, series_name):
 def integrate_by_minutes(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True):
     return integrate_by_time(df, series_name, start_time, end_time, zero_time, extrapolate, interpolate, 'minutes')
 
-# def integrate_by_time(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True, time_unit='minutes'):
-#     """
-#     Calculate discrete time integral of selected 'series_name' from dataframe 'df' between 'start_time' and 'end_time'
-#     'zero_time' (if set) or first datapoint is used if start_time is None
-#     Last datapoint is used if end_time is None
-#     Values between datapoints in source dataframe are linear interpolated if interpolate is True
-#     Constant value between datapoints is assumed if interpolate is False
-#     When end_time is after last datapoint in series and extrapolate is True then the en value is linear extrapolated from last interval's times and values
-#     Assumes variable time steps in the index.
-#
-#     :param df: Input pandas DataFrame with timedelta index.
-#     :param series_name: Series name to integrate.
-#     :param start_time: Start timedelta for integration.
-#     :param end_time: End timedelta for integration.
-#     :param zero_time: optional starting time for integration
-#     :param extrapolate: whether extrapolate after last point of time series
-#     :param interpolate: whether to interpolate between points in time series, if False stepwise integration is performed (value considered constant in each time interval)
-#     :param time_unit: unit of time to use for integration ('minutes', 'hours', 'seconds')
-#
-#     :returns: discrete time integral values.
-#     """
-#
-#     # ensure dataframe is timedelta-indexed
-#     if not isinstance(df.index, pd.TimedeltaIndex):
-#         raise ValueError("DataFrame index must be of type TimedeltaIndex.")
-#
-#     time_conversion_factor = {
-#         'seconds': 1,
-#         'minutes': 60,
-#         'hours': 3600
-#     }
-#
-#     if time_unit not in time_conversion_factor:
-#         raise ValueError("Invalid time unit. Allowed values are 'seconds', 'minutes', 'hours'.")
-#
-#     conversion_factor = time_conversion_factor[time_unit]
-#
-#     # set default start_time and end_time if None
-#     if start_time is None:
-#         start_time = zero_time if zero_time is not None else df.index[0]
-#     if end_time is None:
-#         end_time = df.index[-1]
-#
-#     output_value = 0
-#     prev_time = None  # initialize prev_time with the first time index in the DataFrame
-#     prev_value = None  # store the previous valid value (for NaN skipping)
-#
-#     for time in df.index:
-#         # value = df.loc[time, series_name]
-#         value = get_value_in_time(df, time, series_name, zero_time, extrapolate)
-#         # handle NaN value at the beginning of the series
-#         if pd.isna(value):
-#             if prev_time is None:
-#                 value = 0  # if NaN is at the start, treat it as 0
-#             else:
-#                 continue  # skip row if NaN appears after valid values
-#
-#         if prev_time is not None:
-#             if prev_time >= start_time and time <= end_time:
-#                 # handle error if two consequent times are equal
-#                 if time == prev_time:
-#                     print(f"\nError: two consequent times are equal at {time}. Skipping.")
-#                     continue
-#
-#                 time_diff = time - prev_time
-#
-#                 # perform integration with interpolation or stepwise
-#                 if interpolate:
-#                     output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
-#                 else:
-#                     output_value += prev_value * time_diff.total_seconds() / conversion_factor
-#
-#             elif prev_time < start_time and time > start_time:
-#                 # handle the case when previous time is before start_time
-#                 time_diff = time - start_time
-#                 if interpolate:
-#                     output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
-#                 else:
-#                     output_value += prev_value * time_diff.total_seconds() / conversion_factor
-#
-#             elif prev_time < end_time and time > end_time:
-#                 # handle the case when current time exceeds end_time
-#                 time_diff = end_time - prev_time
-#                 if interpolate:
-#                     output_value += (value + prev_value) / 2 * time_diff.total_seconds() / conversion_factor
-#                 else:
-#                     output_value += prev_value * time_diff.total_seconds() / conversion_factor
-#
-#         # update previous time and previous value
-#         prev_time = time
-#         prev_value = value
-#     return output_value
 
 def integrate_by_time(df, series_name, start_time=None, end_time=None, zero_time=None, extrapolate=None, interpolate=True, time_unit='minutes'):
     # ensure dataframe is timedelta-indexed
@@ -2879,3 +3150,73 @@ def get_value_in_time(df, timedelta, series_name, zero_time=None, interpolate=Tr
         return interpolated_value
     else:
         return None
+
+def integrate_flow(df, value_col, duration_col, placement="start",
+                   interpolate=True, time_unit='minutes'):
+    import pandas as pd
+
+    if not isinstance(df.index, pd.TimedeltaIndex):
+        raise ValueError("Index must be TimedeltaIndex.")
+
+    time_conv = {'seconds': 1, 'minutes': 60, 'hours': 3600}
+    if time_unit not in time_conv:
+        raise ValueError(f"Invalid time_unit: {time_unit}")
+
+    # compute instantaneous flow rates (L/s)
+    flow_rate = df[value_col] / df[duration_col]
+    times = df.index
+    dur = pd.to_timedelta(df[duration_col], unit='s')
+
+    if placement == "start":
+        new_times = pd.Index(times)
+        new_flow = pd.Series(flow_rate.values, index=new_times)
+
+    elif placement == "sample_mid":
+        new_times = pd.Index(times + dur / 2)
+        new_flow = pd.Series(flow_rate.values, index=new_times)
+        new_times = pd.Index([times[0]]).append(new_times)
+        new_flow = pd.concat([pd.Series([0.0], index=[times[0]]), new_flow])
+
+    elif placement == "sample_end":
+        new_times = pd.Index(times + dur)
+        new_flow = pd.Series(flow_rate.values, index=new_times)
+        new_times = pd.Index([times[0]]).append(new_times)
+        new_flow = pd.concat([pd.Series([0.0], index=[times[0]]), new_flow])
+
+    elif placement == "interval_mid":
+        t_series = times.to_series()
+        mid_times = t_series + (t_series.shift(-1) - t_series) / 2
+        mid_times = mid_times.iloc[:-1]
+        new_times = pd.Index(mid_times)
+        new_flow = pd.Series(flow_rate.iloc[:-1].values, index=new_times)
+        new_times = pd.Index([times[0]]).append(new_times)
+        new_flow = pd.concat([pd.Series([0.0], index=[times[0]]), new_flow])
+
+    else:
+        raise ValueError(f"Unknown placement: {placement}")
+
+    adj_df = pd.DataFrame({'flow_rate': new_flow.values}, index=new_times).sort_index()
+
+    # integrate to discharge
+    discharge = []      # per-interval volume
+    cum_discharge = []  # running total
+    total = 0
+    prev_t, prev_f = None, None
+    for t, f in adj_df['flow_rate'].items():
+        if prev_t is not None:
+            dt = (t - prev_t).total_seconds() / time_conv[time_unit]
+            if interpolate:
+                disch = 0.5 * (prev_f + f) * dt
+            else:
+                disch = prev_f * dt
+        else:
+            disch = 0
+        total += disch
+        discharge.append(disch)
+        cum_discharge.append(total)
+
+        prev_t, prev_f = t, f
+
+    adj_df['discharge'] = discharge
+    adj_df['cum_discharge'] = cum_discharge
+    return adj_df
