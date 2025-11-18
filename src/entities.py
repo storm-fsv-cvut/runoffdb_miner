@@ -7,11 +7,13 @@ from datetime import datetime, time, date
 import numpy as np
 import json
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from matplotlib.ticker import MaxNLocator
+from matplotlib.dates import DateFormatter
+import matplotlib.dates as mdates
+from matplotlib.ticker import MultipleLocator, FuncFormatter
 
 from src.db_access import DBconnector
-from src.exceptions import DataframeEmptyError, RecordSetNotComplete, DataframeNotTimeIndexed
+from src.exceptions import DataframeEmptyError, RecordSetNotComplete, DataframeNotTimeIndexed, RequestedTimeDeltaValueMissing
 
 # multipliers for different units to convert between each other
 multipliers = {1: {1: 1},
@@ -103,7 +105,7 @@ class RunoffDB:
         self.assignment_types = self.load_assignment_types()
 
         # do not load the runs as they might be limited by filters
-        self.runs = None
+        self.runs = {}
 
         self.log_file_path = log_file_path
         self.run_log = {}
@@ -159,7 +161,7 @@ class RunoffDB:
     def clear_log(self):
         self.run_log = {}
 
-    def load_runs(self, limit=None, date_from=None, date_to=None, simulators=None, localities=None, crops=None):
+    def load_runs(self, limit=None, date_from=None, date_to=None, simulators=None, localities=None, crops=None, run_id=None):
         """
         Loads Run objects from database filtered to match given limitations. Loads all simulation runs if no filtres provided.
         :param limit: number of runs to load
@@ -198,6 +200,7 @@ class RunoffDB:
                         f"{self.runs_table}.`note_en`, " \
                         f"{self.runs_table}.`crop_condition_cz`, " \
                         f"{self.runs_table}.`crop_condition_en`, " \
+                        f"{self.runs_table}.`reference_run_id`, " \
                         f"{self.run_groups_table}.`sequence_id` AS sequence_id, " \
                         f"{self.run_groups_table}.`datetime` AS datetime, " \
                         f"{self.sequences_table}.`simulator_id` AS simulator_id, " \
@@ -213,24 +216,27 @@ class RunoffDB:
                         f"JOIN {self.plots_table} ON {self.runs_table}.`plot_id` = {self.plots_table}.`id` " \
                         f"JOIN {self.crops_table} ON {self.plots_table}.`crop_id` = {self.crops_table}.`id` " \
                         f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
-                if date_from is not None:
-                    query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
-                if date_to is not None:
-                    query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
-                if simulators is not None:
-                    query += f" AND {self.sequences_table}.`simulator_id` IN ({', '.join([str(s) for s in simulators])})"
-                if localities is not None:
-                    query += f" AND {self.plots_table}.`locality_id` IN ({', '.join([str(s) for s in localities])})"
-                if crops is not None:
-                    query += f" AND {self.runs_table}.`crop_id` IN ({', '.join([str(s) for s in crops])})"
-                # additional conditions
-                # query += f"AND `` = "
+                if run_id is not None:
+                    query += f" AND {self.runs_table}.`id` = {run_id}"
+                else:
+                    if date_from is not None:
+                        query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
+                    if date_to is not None:
+                        query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
+                    if simulators is not None:
+                        query += f" AND {self.sequences_table}.`simulator_id` IN ({', '.join([str(s) for s in simulators])})"
+                    if localities is not None:
+                        query += f" AND {self.plots_table}.`locality_id` IN ({', '.join([str(s) for s in localities])})"
+                    if crops is not None:
+                        query += f" AND {self.runs_table}.`crop_id` IN ({', '.join([str(s) for s in crops])})"
+                    # additional conditions
+                    # query += f"AND `` = "
 
-                # end of the query
-                query += " ORDER BY `datetime` ASC"
+                    # end of the query
+                    query += " ORDER BY `datetime` ASC"
 
-                if limit:
-                    query += f" LIMIT {limit}"
+                    if limit:
+                        query += f" LIMIT {limit}"
                 # print(query)
                 # execute the query and fetch the results
                 thecursor.execute(query)
@@ -245,7 +251,7 @@ class RunoffDB:
                         # new_run.show_details()
                         run_dict.update({new.id: new})
                     thecursor.close()
-                    self.runs = run_dict
+                    self.runs.update(run_dict)
                     return run_dict
             return None
 
@@ -275,13 +281,13 @@ class RunoffDB:
         if plots is not None and not isinstance(plots, list):
             plots = [plots]
 
-        result = self.runs.values()
+        result = list(self.runs.values())
 
         # filter by datetime range
         if date_from is not None:
-            result = [r for r in result if r.datetime >= datetime.combine(date.fromisoformat(date_from), time(0, 0, 0))]
+            result = [r for r in result if r.datetime >= datetime.combine(date_from, time(0, 0, 0))]
         if date_to is not None:
-            result = [r for r in result if r.datetime <= datetime.combine(date.fromisoformat(date_to), time(23, 59, 59))]
+            result = [r for r in result if r.datetime <= datetime.combine(date_to, time(23, 59, 59))]
 
         # filter by categorical ids
         if run_types is not None:
@@ -296,6 +302,12 @@ class RunoffDB:
             result = [r for r in result if r.plot_id in plots]
 
         return result
+
+    def get_run_by_id(self, run_id):
+        if run_id in self.runs.keys():
+            return self.runs[run_id]
+        else:
+            return self.load_runs(run_id=run_id)
 
     def load_plots(self, id=None):
         with self.get_connection() as dbcon:
@@ -764,7 +776,7 @@ class Run:
         self.run_type = self.runoffdb.run_types[self.run_type_id]
         self.ttr = kwargs["ttr"]
         self.measurements = None
-        self.brothers = None
+        self.brothers = self.load_group_brothers()
         self.plot_id = kwargs["plot_id"]
         self.plot = runoffdb.plots[self.plot_id]
         self.locality_id = kwargs["locality_id"]
@@ -772,7 +784,7 @@ class Run:
         self.crop_id = kwargs["crop_id"]
         self.crop = runoffdb.crops[self.crop_id]
         self.crop_type_id = kwargs["crop_type_id"]
-        self.crop_name = None
+        self.reference_run_id = kwargs["reference_run_id"]
 
         self.initmoist_recid = kwargs["initmoist_recid"]
         self.surface_cover_recid = kwargs["surface_cover_recid"]
@@ -971,47 +983,54 @@ class Run:
     def get_rainfall_intensity_timeline(self, target_unit_id=None, series_label="rainfall_intensity"):
         if self.rain_intensity_recid is not None:
             intensity_rec = self.runoffdb.load_record_by_id(self.rain_intensity_recid)
-            intensity_data = intensity_rec.get_data_in_unit(target_unit_id, series_label, demand_timeline=True)
-            # constant intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
-            if len(intensity_data.index) == 1:
-                self.runoffdb.log(self.id, f"rainfall intensity series of record {intensity_rec.id} contains only one data point")
-                print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
-                return None
-            elif len(intensity_data.index) == 2:
-                if intensity_data["rain_intensity"].iloc[-1] != 0:
-                    self.runoffdb.log(self.id, f"rainfall intensity timeline record {intensity_rec} not ending with 0")
-                    print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} doesn't end with zero value!")
+            try:
+                intensity_data = intensity_rec.get_data_in_unit(target_unit_id, series_label, demand_timeline=True)
+            except DataframeEmptyError:
+                raise
+            else:
+                # constant intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
+                if len(intensity_data.index) == 1:
+                    self.runoffdb.log(self.id, f"rainfall intensity series of record {intensity_rec.id} contains only one data point")
+                    print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
                     return None
-                else:
-                    return intensity_data
+                elif len(intensity_data.index) == 2:
+                    if intensity_data["rain_intensity"].iloc[-1] != 0:
+                        self.runoffdb.log(self.id, f"rainfall intensity timeline record {intensity_rec} not ending with 0")
+                        print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} doesn't end with zero value!")
+                        return None
+                    else:
+                        return intensity_data
         else:
             self.runoffdb.log(self.id, f"dedicated rainfall intensity record not assigned")
             print(f"\trun #{self.id} doesn't have dedicated rainfall intensity record ID assigned")
             return None
 
     def get_rainfall_intensity_value(self, target_unit_id = None):
-        intensity_data = self.get_rainfall_intensity_timeline(target_unit_id, "rain_intensity")
-        if intensity_data is not None:
-            # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
-            if len(intensity_data.index) == 1:
-                return None
-            elif len(intensity_data.index) == 2:
-                if intensity_data["rain_intensity"].iloc[-1] != 0:
-                    return None
-                return intensity_data["rain_intensity"].iloc[0]
-            else:
-                # interrupted or variable intensity rainfall
-                numzeros = 0
-                for datapoint in intensity_data:
-                    if datapoint[0] == 0:
-                        numzeros += 1
-                if numzeros > 1:
-                    return "interrupted"
-                else:
-                    return "variable"
-        else:
+        try:
+            intensity_data = self.get_rainfall_intensity_timeline(target_unit_id, "rain_intensity")
+        except DataframeEmptyError:
             return None
-
+        else:
+            if intensity_data is not None:
+                # regular intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
+                if len(intensity_data.index) == 1:
+                    return None
+                elif len(intensity_data.index) == 2:
+                    if intensity_data["rain_intensity"].iloc[-1] != 0:
+                        return None
+                    return intensity_data["rain_intensity"].iloc[0]
+                else:
+                    # interrupted or variable intensity rainfall
+                    numzeros = 0
+                    for datapoint in intensity_data:
+                        if datapoint[0] == 0:
+                            numzeros += 1
+                    if numzeros > 1:
+                        return "interrupted"
+                    else:
+                        return "variable"
+            else:
+                return None
 
     def get_total_rainfall(self):
         raise NotImplementedError("Run object method 'get_total_rainfall()' is not implemented yet")
@@ -1187,23 +1206,21 @@ class Run:
         Combines hydrological data records of a run into one TimeDelta indexed dataframe with cross-interpolated time points.
         :param labels_map: Dictionary of labels that should be assigned to records in the output dataframe
         :param request_map: Dictionary of True/False that state if the record is essential for the output -
-        If essential and not found The RecordSetNotComlete exception is thrown
+                            If essential and not found The RecordSetNotComplete exception is thrown
         :param interpolation_map: Dictionary specifying interpolation method
-        :param kwargs: Dictionary with labels for requested records.
         :return: pandas DataFrame with requested data.
-        :except: RecordSetNotComplete if requested record is not found for the run
         """
 
         # default units
         default_units = {
-            "runoff": 1, # in l.min-1
-            "sediment_concentration": 3, # in g.l-1
-            "rainfall_intensity": 6,# in mm.hour-1
-            "sediment_flux": 23, # in g.min-1
-            }
+            "runoff": 1,  # in l.min-1
+            "sediment_concentration": 3,  # in g.l-1
+            "rainfall_intensity": 6,  # in mm.hour-1
+            "sediment_flux": 23,  # in g.min-1
+        }
 
         # default labels map
-        default_lables = {
+        default_labels = {
             "runoff": "runoff [l.s-1]",
             "sediment_concentration": "sediment concentration [g.l-1]",
             "rainfall_intensity": "rainfall intensity [mm.hour-1]",
@@ -1215,161 +1232,341 @@ class Run:
 
         # default interpolation map
         default_interpolations = {
-                "runoff": "linear",
-                "sediment_concentration": "linear",
-                "rainfall_intensity": "ffill",
-            }
-
-
-        # get complete set of labels by adopting user input
-        if not labels_map:
-            labels = default_lables.copy()
-        else:
-            labels = {key: labels_map.get(key, def_label) for key, def_label in default_lables.items()}
-
-        # default request flag for all is False - no runs will throw the RecordSetNotComplete exception
-        if not request_map:
-            requested = {key: False for key in default_lables.keys()}
-        else:
-            requested = {key: request_map.get(key, False) for key in default_lables.keys()}
-
-        # get complete set of interpolations by adopting user input
-        if not interpolation_map:
-            interpolations = default_interpolations.copy()
-        else:
-            interpolations = {key: interpolation_map.get(key, def_inter) for key, def_inter in
-                              default_interpolations.items()}
-
-        # known dependencies and record-fetching functions
-        dependencies = {
-            "rainfall_intensity": {"record": self.get_best_rainfall_record, "derived_from": []},
-            "rainfall_total": {"derived_from": ["rainfall_intensity"]},
-            "runoff": {"record": self.get_best_runoff_record, "derived_from": []},
-            "sediment_concentration": {"record": self.get_best_sediment_concentration_record, "derived_from": []},
-            "discharge": {"derived_from": ["runoff"]},
-            "sediment_flux": {"derived_from": ["runoff", "sediment_concentration"]},
-            "sediment_yield": {"derived_from": ["runoff", "sediment_concentration"]},
+            "runoff": "linear",
+            "sediment_concentration": "linear",
+            "rainfall_intensity": "ffill",
+            "sediment_flux": "linear"
         }
 
-        requested_keys = [k for k, v in requested.items() if v]
-        present_records, missing_records = self._resolve_present_records(requested_keys, dependencies)
+        # normalize maps
+        labels_map = labels_map or {}
+        request_map = request_map or {}
+        interpolation_map = interpolation_map or {}
 
-        # print(f" --> missing records: {missing_records}")
+        labels = {k: labels_map.get(k, v) for k, v in default_labels.items()}
+        requested = {k: request_map.get(k, False) for k in default_labels.keys()}
+        interpolations = {k: interpolation_map.get(k, v) for k, v in default_interpolations.items()}
+
+        # dependencies
+        dependencies = {
+            "rainfall_intensity": [{"record": self.get_best_record_of_unit, "derived_from": []}],
+            "rainfall_total": [{"derived_from": ["rainfall_intensity"]}],
+            "runoff": [{"record": self.get_best_record_of_unit, "derived_from": []}],
+            "sediment_concentration": [{"record": self.get_best_record_of_unit, "derived_from": []}],
+            "discharge": [{"derived_from": ["runoff"]}],
+            "sediment_flux": [
+                {"record": self.get_best_record_of_unit},
+                {"derived_from": ["runoff", "sediment_concentration"]}
+            ],
+            "sediment_yield": [{"derived_from": ["sediment_flux"]}],
+        }
+
+        # resolve present records
+        requested_keys = [k for k, v in requested.items() if v]
+        present_records, missing_records, derived_sources, skipped_derived = self._resolve_present_records(requested_keys, dependencies, default_units)
+
         if missing_records:
             raise RecordSetNotComplete(requested_keys, missing_records)
 
-        # Collect data to DataFrames
+        # collect data
         dataframes_to_merge = []
         empty_dataframes = []
 
-        # print(f"present records: {present_records}")
-        # Try loading the data for each requested record
         for key, rec in present_records.items():
             if rec:
                 try:
                     unit_id = default_units.get(key)
-                    df = self._get_record_data(rec, key, labels[key], demand_timeline=True, target_unit_id=unit_id)
+                    df = self._get_record_data(rec, key, key, demand_timeline=True, target_unit_id=unit_id)
                 except DataframeEmptyError:
                     empty_dataframes.append(key)
                 else:
                     dataframes_to_merge.append(df)
             else:
-                # if record is None (means it doesn't exist)
-                self.runoffdb.log(self.id, f"{labels[key]} record not available")
-                dataframes_to_merge.append(pd.DataFrame({labels[key]: []}))
+                # self.runoffdb.log(self.id, f"{key} record not available")
+                dataframes_to_merge.append(pd.DataFrame({key: []}))
 
-        # raise exception if any dataframe is empty
-        # print(f" --> empty records: {empty_dataframes}")
         if empty_dataframes:
             raise RecordSetNotComplete(requested_keys, empty_dataframes)
 
-        # merge dataframes into a single dataframe
+        # merge
         if len(dataframes_to_merge) > 1:
             merged_data = pd.concat(dataframes_to_merge, axis=1, join='outer')
-        elif len(dataframes_to_merge) == 1:
+        elif dataframes_to_merge:
             merged_data = dataframes_to_merge[0]
         else:
-            # create an empty DataFrame with expected columns and no rows
-            merged_data = pd.DataFrame()
+            merged_data = pd.DataFrame(columns=list(default_labels.keys()))
 
-        # add missing keys, so that the column count is constant
-        for key, label in labels.items():
-            if label not in merged_data.columns:
-                merged_data[label] = pd.NA
+        # add missing keys to keep all columns
+        for key in default_labels:
+            if key not in merged_data:
+                merged_data[key] = pd.NA
 
-        # reorder columns according to labels_map
-        final_columns = [labels[k] for k in labels]
-        merged_data = merged_data.reindex(columns=final_columns)
-
-        # ensure merged index is a TimedeltaIndex
         merged_data.index = pd.to_timedelta(merged_data.index, errors='raise')
+        merged_data.sort_index(inplace=True)
 
-        # sort by time index
-        try:
-            merged_data.sort_index(inplace=True)
-        except TypeError:
-            print("Incompatible indexes in input dataframes - one of the input dataframes is not a timeline")
-
-        # Adjust the merged data for missing or available labels
-        # self._adjust_end_time(merged_data, kwargs)
-
+        # interpolate
         merged_data = self._interpolate_data(merged_data, interpolations)
 
-        # Calculate derived fields like sediment_flux, rainfall_total, etc.
-        # if "sediment_flux" in requested_keys and all(labels_map.get(col) in df for col in ["runoff", "sediment_concentration"]):
-        #     df[labels_map.get("sediment_flux")] = df[labels_map.get("runoff")] * df[labels_map.get("sediment_concentration")]
+        # calculate derived fields using **internal keys**
+        if "rainfall_intensity" in merged_data and not merged_data["rainfall_intensity"].empty:
+            integrate_data_series(merged_data, "rainfall_intensity", "rainfall_total", interpolate=True,
+                                  time_unit='hours')
 
-        if labels.get("rainfall_intensity") in merged_data and not merged_data[labels.get("rainfall_intensity")].empty:
-            integrate_data_series(merged_data, labels.get("rainfall_intensity"), labels.get("rainfall_total"), interpolate=True, time_unit='hours')
+        if "runoff" in merged_data and not merged_data["runoff"].empty:
+            integrate_data_series(merged_data, "runoff", "discharge", interpolate=True, time_unit='minutes')
 
-        if labels.get("runoff") in merged_data and not merged_data[labels.get("runoff")].empty:
-            integrate_data_series(merged_data, labels.get("runoff"), labels.get("discharge"), interpolate=True, time_unit='minutes')
+        # calculate the sediment flux only if not directly loaded (= is not stored in database as record)
+        if "sediment_flux" not in merged_data or merged_data["sediment_flux"].empty:
+            if all(k in merged_data for k in ["runoff", "sediment_concentration"]):
+                merged_data["sediment_flux"] = merged_data["runoff"] * merged_data["sediment_concentration"]
 
-        if all(labels.get(col) in merged_data for col in ["runoff", "sediment_concentration"]):
-            merged_data[labels["sediment_flux"]] = (merged_data[labels["runoff"]] * merged_data[labels["sediment_concentration"]]
-            )
+        if "sediment_flux" in merged_data and not merged_data["sediment_flux"].empty:
+            integrate_data_series(merged_data, "sediment_flux", "sediment_yield", interpolate=True, time_unit='minutes')
 
-        if "sediment_flux" in merged_data and not merged_data[labels.get("sediment_flux")].empty:
-            integrate_data_series(merged_data, labels.get("sediment_flux"), labels.get("sediment_yield"), interpolate=True, time_unit='minutes')
+        # **finally rename columns** according to labels_map / defaults
+        merged_data = merged_data.rename(columns=labels)
+
+        # handle derived sources
+        for key, sources in derived_sources.items():
+            # if all sources are available in merged_data
+            if all(src in merged_data for src in sources):
+                self.runoffdb.log(self.id, f"{key} derived from {', '.join(sources)} at runtime")
+                # actual derivations are already done in your code (e.g., sediment_flux, yield, etc.)
+            else:
+                # log missing sources and leave it empty
+                missing_inputs = [src for src in sources if src not in merged_data]
+                self.runoffdb.log(self.id, f"{key} derivation skipped (missing sources: {', '.join(missing_inputs)})")
+                merged_data[key] = pd.NA
 
         return merged_data
 
-    def _resolve_present_records(self, requested_keys, dependencies):
-        """
-        Resolves the presence of all base records regardless of requested_keys.
-        Records are added to present_records if successfully loaded.
-        Only records that are requested or are dependencies and cannot be loaded
-        are added to missing_records.
+    # def get_info_headers(self, lang="en"):
+    #     """
+    #     Returns column header strings for basic simulation run properties as array with order corresponding to
+    #     values order in 'get_info_array()'
+    #     :param lang: language string identifier (currently implemented 'en' and 'cz')
+    #     :return:
+    #     """
+    #
+    #     headers = {"cz": ["ID sekvence", "ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "název plochy",
+    #                       "délka plochy [m]",
+    #                       "šířka plochy [m]", "sklon plochy [%]", "poznámky k ploše", "dnů od zasetí",
+    #                       "ochranné opatření", "ID simulátoru", "simulátor",
+    #                       "ID plodiny", "plodina", "stav plodiny", "výška plodiny [cm]", "počet rostlin [1/m2]", "BBCH",
+    #                       "zakrytí povrchu [%]",
+    #                       "počáteční stav", "počáteční vlhkost", "<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
+    #                       "objemová hmotnost [g/cm3]", "intenzita srážky [mm/h]",
+    #                       "TTR"],
+    #                "en": ["sequence ID", "run ID", "locality ID", "locality", "date", "plot ID", "plot name",
+    #                       "plot length [m]",
+    #                       "plot width [m]", "plot slope [%]", "plot notes", "days since seeding",
+    #                       "soil protection measure",
+    #                       "simulator ID", "simulator", "crop ID", "crop", "crop condition", "crop height [cm]",
+    #                       "plant density [pcs.m^2]", "BBCH", "surface cover [%]",
+    #                       "initial cond.", "init. moisture", "<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
+    #                       "bulk density [g.cm-3]", "rain intensity [mm.h-1]",
+    #                       "time to runoff"]}
+    #     if lang not in headers.keys():
+    #         raise ValueError()
+    #     return headers[lang]
 
-        :return: (present_records, missing_records) as dict and list.
+    def get_info_array(self, line=None, no_data_value=None, lang="en"):
+        """
+        Returns basic simulation run properties as array with values corresponding to attribute names (header strings)
+        that are defined 'get_info_headers()'
+        :param line: existing array of properties value or None (starting with empty list)
+        :param no_data_value: No Data value to be used in output
+        :param lang: language string identifier (currently implemented 'en' and 'cz')
+        :return:
+        """
+
+        headers = {"cz": [], "en": []}
+        line = line or []
+
+        if lang not in headers.keys():
+            raise ValueError()
+
+        # gather all the info and values common for the whole simulation run ===================================
+        # id of sequence the run belungs to
+        headers["cz"].append("ID sekvence")
+        headers["en"].append("sequence ID")
+        line.append(self.sequence_id)
+        # id of the run
+        headers["cz"].append("ID simulace")
+        headers["en"].append("run ID")
+        line.append(self.id)
+        # id of locality where the run took place
+        "ID lokality"
+        headers["cz"].append("ID lokality")
+        headers["en"].append("locality ID")
+        line.append(self.locality.id)
+        # name of the locality where the run took place
+        headers["cz"].append("lokalita")
+        headers["en"].append("locality")
+        line.append(self.locality.name)
+        # date of the run
+        headers["cz"].append("datum")
+        headers["en"].append("date")
+        line.append(czech_date(self.datetime))
+        # id of the plot where the run was executed
+        headers["cz"].append("ID plochy")
+        headers["en"].append("plot ID")
+        line.append(self.plot_id)
+        # name of the plot where the run was executed
+        headers["cz"].append("název plochy")
+        headers["en"].append("plot name")
+        line.append(self.plot.name)
+        # length in meters of the plot where the run was executed
+        headers["cz"].append("délka plochy [m]")
+        headers["en"].append("plot length [m]")
+        line.append(self.plot.plot_length)
+        headers["cz"].append("šířka plochy [m]")
+        headers["en"].append("plot width [m]")
+        line.append(self.plot.plot_width)
+        headers["cz"].append("sklon plochy [%]")
+        headers["en"].append("plot slope [%]")
+        line.append(self.plot.plot_slope)
+        headers["cz"].append("poznámky k ploše")
+        headers["en"].append("plot notes")
+        line.append(self.plot.get_note(lang=lang, no_data_value=no_data_value))
+        headers["cz"].append("dnů od zasetí")
+        headers["en"].append("days since seeding")
+        line.append(self.plot.days_since_seeding(self.datetime) or no_data_value)
+        headers["cz"].append("ochranná opatření")
+        headers["en"].append("soil protection measures")
+        line.append(self.plot.get_protection_measures_names(lang) or no_data_value)
+        headers["cz"].append("ID simulátoru")
+        headers["en"].append("simulator ID")
+        line.append(self.simulator.id)
+        headers["cz"].append("simulátor")
+        headers["en"].append("simulator")
+        line.append(self.simulator.name[lang])
+        headers["cz"].append("ID plodiny")
+        headers["en"].append("crop ID")
+        line.append(self.crop_id if self.crop_id else no_data_value)
+        headers["cz"].append("plodina")
+        headers["en"].append("crop")
+        line.append(self.crop.name[lang] if self.crop else no_data_value)
+        headers["cz"].append("stav plodiny")
+        headers["en"].append("crop condition")
+        line.append(f"\"{self.crop_condition[lang]}\"" if self.crop_condition[lang] else no_data_value)
+        headers["cz"].append("výška plodiny [cm]")
+        headers["en"].append("crop height [cm]")
+        line.append(self.get_crop_height_value() or no_data_value)
+        headers["cz"].append("počet rostlin [1/m2]")
+        headers["en"].append("plant density [pcs.m^2]")
+        line.append(self.get_plant_density_value() or no_data_value)
+        headers["cz"].append("BBCH")
+        headers["en"].append("BBCH")
+        line.append(self.bbch or no_data_value)
+        headers["cz"].append("zakrytí povrchu [%]")
+        headers["en"].append("surface cover [%]")
+        line.append(self.get_surface_cover_value() or no_data_value)
+        headers["cz"].append("počáteční stav")
+        headers["en"].append("initial cond.")
+        line.append(self.run_type.name[lang])
+        headers["cz"].append("počáteční vlhkost")
+        headers["en"].append("init. moisture")
+        line.append(self.get_initial_moisture_value() or no_data_value)
+
+        # get and transform soil texture data
+        headers["cz"].extend(["<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>"])
+        headers["en"].extend(["<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>"])
+        WRB_fraction_limits = [0.002, 0.063, 2]
+        try:
+            texture_data = self.get_best_soil_texture_data("cumulative_mass_content", "particle_size",
+                                                          index_column="particle_size",
+                                                          order_by="particle_size",
+                                                          limits=WRB_fraction_limits)
+        except DataframeEmptyError as dee:
+            line.extend(len(WRB_fraction_limits) * [no_data_value])
+            self.runoffdb.log(self.id, f"soil texture data missing: {dee.message}")
+
+        else:
+            if texture_data is not None:
+                for i, cl in enumerate(WRB_fraction_limits):
+                    line.append(texture_data.loc[WRB_fraction_limits[i], 'cumulative_mass_content'])
+            else:
+                line.extend(len(WRB_fraction_limits) * [no_data_value])
+
+        # get bulk density data
+        headers["cz"].append("objemová hmotnost [g/cm3]")
+        headers["en"].append("bulk density [g.cm-3]")
+        try:
+            line.append(self.get_best_bulk_density_value(27) or no_data_value)
+        except DataframeEmptyError as dee:
+            line.append(no_data_value)
+            self.runoffdb.log(self.id, f"bulk density data missing: {dee.message}")
+
+        headers["cz"].append("intenzita srážky [mm/h]")
+        headers["en"].append("rain intensity [mm.h-1]")
+        try:
+            line.append(self.get_rainfall_intensity_value(6) or no_data_value)
+        except DataframeEmptyError as dee:
+            line.append(no_data_value)
+            self.runoffdb.log(self.id, f"rainfall intensity data missing: {dee.message}")
+
+        headers["cz"].append("TTR")
+        headers["en"].append("time to runoff")
+        line.append(self.ttr)
+
+        return line, headers[lang]
+
+    def _resolve_present_records(self, requested_keys, dependencies, units=None):
+        """
+        loads all available records, supports priority list of dependency options per key.
+        automatically passes the unit_id from default_units[key] to get_best_record_of_unit().
+        :return: (present_records, missing_records, derived_sources, skipped_derived)
         """
         present_records = {}
         missing_records = []
+        derived_sources = {}
+        skipped_derived = {}
 
-        for key, config in dependencies.items():
-            if "record" not in config:
-                continue  # skip derived fields
+        for key, configs in dependencies.items():
+            # normalize to list
+            if isinstance(configs, dict):
+                configs = [configs]
 
-            try:
-                record = config["record"]()
-                present_records[key] = record
+            record = None
+            source_info = None
 
-                # if it's explicitly needed and not present, mark missing
-                if record is None and (
-                        key in requested_keys or
-                        any(key in dependencies[req].get("derived_from", []) for req in requested_keys)
-                ):
-                    missing_records.append(key)
+            for config in configs:
+                if "record" in config:
+                    record_source = config["record"]
 
-            except Exception:
-                present_records[key] = None
-                if (
-                        key in requested_keys or
-                        any(key in dependencies[req].get("derived_from", []) for req in requested_keys)
-                ):
-                    missing_records.append(key)
+                    try:
+                        # if record_source is callable (e.g., self.get_best_record_of_unit)
+                        if callable(record_source):
+                            # if it expects a unit_id, provide it from default_units if available
+                            if units and key in units:
+                                record = record_source(units[key])
+                            else:
+                                record = record_source()
+                        else:
+                            # already a record instance
+                            record = record_source
+                    except Exception:
+                        record = None
 
-        return present_records, missing_records
+                    if record is not None:
+                        source_info = {"type": "record"}
+                        break  # found usable record
+
+                elif "derived_from" in config:
+                    if not source_info:
+                        source_info = {"type": "derived", "from": config["derived_from"]}
+
+            present_records[key] = record
+
+            if source_info and source_info["type"] == "derived":
+                derived_sources[key] = source_info["from"]
+
+            # mark missing requested records (no record, no derived path)
+            if key in requested_keys and record is None and not source_info:
+                missing_records.append(key)
+
+        return present_records, missing_records, derived_sources, skipped_derived
 
     def _get_record_data(self, record, label, log_label, demand_timeline=False, target_unit_id=None):
         """
@@ -1400,7 +1597,7 @@ class Run:
             self.runoffdb.log(self.id, f"{log_label} DataFrame of record #{record.id} is not timeline")
             return pd.DataFrame({label: []})
         except Exception as e:
-            self.runoffdb.log(self.id, f"{log_label} record not available ({e})")
+            self.runoffdb.log(self.id, f"{log_label} record not available:\n{e}")
             return pd.DataFrame({label: []})
 
     def _adjust_end_time(self, merged_data, kwargs):
@@ -1439,6 +1636,12 @@ class Run:
                     raise ValueError(f"Unsupported interpolation method: {method} for column {column}")
         return df
 
+    def get_reference_run(self):
+        if self.reference_run_id is None:
+            return None
+        else:
+            return self.runoffdb.get_run_by_id(self.reference_run_id)
+
     def get_records(self, unit_id=None,
                     phenomenon_id=None,
                     record_type_id=None,
@@ -1466,33 +1669,19 @@ class Run:
         else:
             return None
 
-    def plot_hydro_data(self, df, output_path, series_to_plot=None):
+    def plot_hydro_data(self, df, output_path, series_to_plot=None, xaxis_format="%M:%S",
+                        extra_points=None, plot_title=None):
         """
-        Plot selected hydro-sediment data from get_best_hydro_data() and save to file.
+        Plot selected hydro-sediment data and save to file.
+        Supports optional extra points per series.
 
-        Each data series gets its own Y-axis (stacked if needed).
-        Uses the timedelta index (in minutes) as X-axis.
-
-        Chart types per key:
-            rainfall_intensity: bar
-            rainfall_total: line
-            runoff: point
-            discharge: line
-            sediment_flux: line
-            sediment_yield: line
-
-        :param output_path: File path to save the plot (e.g., "output.png")
-        :param series_to_plot: Optional list of column names to include (default is all recognized ones)
+        :param df: DataFrame with hydro-sediment data, indexed by TimedeltaIndex
+        :param output_path: File path to save the plot
+        :param series_to_plot: Dict {column_name: chart_type} e.g. 'line', 'bar', 'point', 'step'
+        :param xaxis_format: X-axis label format (strftime-style, e.g. "%M:%S")
+        :param extra_points: Dict {column_name: [(Timedelta, value), ...]}
+        :param plot_title: Optional title for the plot
         """
-        default_chart_types = {
-            'rainfall_intensity': 'bar',
-            'rainfall_total': 'line',
-            'runoff': 'point',
-            'discharge': 'line',
-            'sediment_flux': 'line',
-            'sediment_yield': 'line'
-        }
-
         if df is None or df.empty:
             print("No hydro-sediment data available to plot.")
             return
@@ -1500,60 +1689,257 @@ class Run:
         if not isinstance(df.index, pd.TimedeltaIndex):
             raise ValueError("DataFrame index must be a TimedeltaIndex.")
 
-        available_columns = [c for c in default_chart_types if c in df.columns]
+        # default chart types
+        default_series = {
+            'rainfall_intensity': 'bar',
+            'rainfall_total': 'line',
+            'runoff': 'line',
+            'discharge': 'line',
+            'sediment_flux': 'line',
+            'sediment_yield': 'line'
+        }
 
+        # filter what to plot
         if series_to_plot is None:
-            columns = available_columns
+            series_to_plot = {k: v for k, v in default_series.items() if k in df.columns}
         else:
-            columns = [col for col in series_to_plot if col in available_columns]
+            series_to_plot = {k: v for k, v in series_to_plot.items() if k in df.columns}
 
-        if not columns:
+        if not series_to_plot:
             print("No valid columns selected for plotting.")
             return
 
+        # setup figure
         fig, ax1 = plt.subplots(figsize=(14, 6))
         base_ax = ax1
         axes = [base_ax]
         lines = []
 
-        # Create additional Y-axes if needed
-        for i in range(1, len(columns)):
+        # spacing between right-side Y-axes
+        yaxis_spacing = 0.07
+
+        # create additional Y-axes if needed
+        for i in range(1, len(series_to_plot)):
             new_ax = base_ax.twinx()
-            new_ax.spines.right.set_position(("axes", 1 + 0.1 * i))
+            pos = 1 + yaxis_spacing * (i - 1)
+            new_ax.spines["right"].set_position(("axes", pos))
+            new_ax.spines["right"].set_visible(True)
+            new_ax.yaxis.set_ticks_position('right')
+            new_ax.yaxis.set_label_position('right')
+            new_ax.patch.set_visible(False)
             axes.append(new_ax)
 
-        x_values = df.index.total_seconds() / 60  # X in minutes
+        if len(series_to_plot) > 1:
+            fig.subplots_adjust(right=0.80 + (len(series_to_plot) - 2) * 0.06)
+
+        # --- X-axis setup ---
+        # use numeric values in minutes
+        x_values = df.index.total_seconds() / 60
         color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-        for i, col in enumerate(columns):
+        # --- plot each series ---
+        y_max_quotient = 1.0
+        for i, (col, chart_type) in enumerate(series_to_plot.items()):
             ax = axes[i]
             color = color_cycle[i % len(color_cycle)]
-            chart_type = default_chart_types.get(col, 'line')
 
             if chart_type == 'bar':
                 bar_width = (x_values[1] - x_values[0]) if len(x_values) > 1 else 1
                 line = ax.bar(x_values, df[col], width=bar_width, label=col, color=color, alpha=0.6)
             elif chart_type == 'point':
                 line, = ax.plot(x_values, df[col], 'o', label=col, color=color)
+            elif chart_type == 'step':
+                line, = ax.step(x_values, df[col], where='post', label=col, color=color)
             else:  # line
                 line, = ax.plot(x_values, df[col], label=col, color=color)
+
+            # optional extra points
+            if extra_points and col in extra_points:
+                x_extra = [t.total_seconds() / 60 for t, _ in extra_points[col]]
+                y_extra = [v for _, v in extra_points[col]]
+                ax.plot(x_extra, y_extra, 'o', color='black', markersize=6,
+                        markeredgecolor=color, zorder=10)
+
+            # ensure Y-axis starts at 0 and extend top slightly
+            ax.relim()
+            ax.autoscale_view()
+            ymin, ymax = ax.get_ylim()
+            ymax *= y_max_quotient
+            ax.set_ylim(bottom=0, top=ymax)
+            y_max_quotient += 0.05  # next axis slightly taller
+
+            # tighten label spacing
+            ax.yaxis.labelpad = 4
 
             ax.set_ylabel(col, color=color)
             ax.tick_params(axis='y', labelcolor=color)
             lines.append(line)
 
-        base_ax.set_xlabel("Time [minutes]")
-        base_ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        base_ax.grid(True, which='both', axis='both', linestyle='--', alpha=0.4)
+        # --- X-axis formatting (exact 1-minute ticks starting at 0) ---
+        tick_interval = 1.0  # minutes
+        base_ax.set_xlim(left=0)
 
-        # Create a single combined legend
+        base_ax.xaxis.set_major_locator(MultipleLocator(tick_interval))
+        base_ax.xaxis.set_major_formatter(FuncFormatter(
+            lambda x, _: f"{int(x):02d}:{int((x % 1) * 60):02d}"
+        ))
+
+        base_ax.set_xlabel("Time [MM:SS]")
+        base_ax.grid(True, which='major', axis='x', linestyle='--', alpha=0.4)
+        base_ax.grid(True, which='both', axis='y', linestyle='--', alpha=0.3)
+
+        # rotate tick labels
+        plt.setp(base_ax.get_xticklabels(), rotation=90, ha='center')
+
+        # --- legend ---
         labels = [l.get_label() if hasattr(l, 'get_label') else l[0].get_label() for l in lines]
-        fig.legend(lines, labels, loc='upper right', bbox_to_anchor=(1, 1), bbox_transform=fig.transFigure)
+        base_ax.legend(lines, labels, loc='lower right', frameon=False)
 
-        plt.title("Hydro-Sediment Time Series")
+        plt.title(plot_title or "Hydro-Sediment Time Series")
         plt.tight_layout()
         fig.savefig(output_path)
         plt.close(fig)
+
+    # def plot_hydro_data2(self, df, output_path, series_to_plot=None, xaxis_format="%H:%M:%S", extra_points=None, plot_title=None):
+    #     """
+    #     Plot selected hydro-sediment data and save to file.
+    #     Supports optional extra points per series.
+    #
+    #     :param df: DataFrame with hydro-sediment data, indexed by TimedeltaIndex
+    #     :param output_path: File path to save the plot
+    #     :param series_to_plot: Dict {column_name: chart_type} e.g. 'line', 'bar', 'point', 'step'
+    #     :param xaxis_format: X-axis label format (strftime-style)
+    #     :param extra_points: Dict {column_name: [(Timedelta, value), ...]}
+    #     """
+    #     if df is None or df.empty:
+    #         print("No hydro-sediment data available to plot.")
+    #         return
+    #
+    #     if not isinstance(df.index, pd.TimedeltaIndex):
+    #         raise ValueError("DataFrame index must be a TimedeltaIndex.")
+    #
+    #     # default chart types
+    #     default_series = {
+    #         'rainfall_intensity': 'bar',
+    #         'rainfall_total': 'line',
+    #         'runoff': 'line',
+    #         'discharge': 'line',
+    #         'sediment_flux': 'line',
+    #         'sediment_yield': 'line'
+    #     }
+    #
+    #     # filter what to plot
+    #     if series_to_plot is None:
+    #         series_to_plot = {k: v for k, v in default_series.items() if k in df.columns}
+    #     else:
+    #         series_to_plot = {k: v for k, v in series_to_plot.items() if k in df.columns}
+    #
+    #     if not series_to_plot:
+    #         print("No valid columns selected for plotting.")
+    #         return
+    #
+    #     # setup plot
+    #     fig, ax1 = plt.subplots(figsize=(14, 6))
+    #     base_ax = ax1
+    #     axes = [base_ax]
+    #     lines = []
+    #
+    #     # spacing between right-side Y-axes
+    #     yaxis_spacing = 0.08
+    #
+    #     for i in range(1, len(series_to_plot)):
+    #         new_ax = base_ax.twinx()
+    #         pos = 1 + yaxis_spacing * (i - 1)
+    #         new_ax.spines["right"].set_position(("axes", pos))
+    #
+    #         # ✅ make sure the right spine and ticks are visible
+    #         new_ax.spines["right"].set_visible(True)
+    #         new_ax.yaxis.set_ticks_position('right')
+    #         new_ax.yaxis.set_label_position('right')
+    #
+    #         # remove background but keep spines visible
+    #         new_ax.patch.set_visible(False)
+    #
+    #         axes.append(new_ax)
+    #
+    #     # add space on the right if multiple axes exist
+    #     if len(series_to_plot) > 1:
+    #         fig.subplots_adjust(right=0.80 + (len(series_to_plot) - 2) * 0.05)
+    #
+    #     # convert timedelta index for matplotlib
+    #     x_values = pd.to_datetime(df.index.total_seconds(), unit='s')
+    #     color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    #
+    #     # --- main series plotting ---
+    #     for i, (col, chart_type) in enumerate(series_to_plot.items()):
+    #         ax = axes[i]  # each column has its own axis
+    #         color = color_cycle[i % len(color_cycle)]
+    #
+    #         if chart_type == 'bar':
+    #             bar_width = (x_values[1] - x_values[0]).total_seconds() / 60 if len(x_values) > 1 else 1
+    #             line = ax.bar(x_values, df[col], width=bar_width, label=col, color=color, alpha=0.6)
+    #         elif chart_type == 'point':
+    #             line, = ax.plot(x_values, df[col], 'o', label=col, color=color)
+    #         elif chart_type == 'step':
+    #             line, = ax.step(x_values, df[col], where='post', label=col, color=color)
+    #         else:  # line
+    #             line, = ax.plot(x_values, df[col], label=col, color=color)
+    #
+    #         # optional extra points
+    #         if extra_points and col in extra_points:
+    #             x_extra = [pd.to_datetime(t.total_seconds(), unit='s') for t, _ in extra_points[col]]
+    #             y_extra = [v for _, v in extra_points[col]]
+    #             ax.plot(x_extra, y_extra, 'o', color=color, markersize=8, label=f"{col}_point")
+    #
+    #         # ensure Y-axis starts at 0
+    #         ax.relim()
+    #         ax.autoscale_view()
+    #         ymin, ymax = ax.get_ylim()
+    #         ax.set_ylim(bottom=0, top=ymax)
+    #
+    #         ax.set_ylabel(col, color=color)
+    #         ax.tick_params(axis='y', labelcolor=color)
+    #         lines.append(line)
+    #
+    #     # --- x-axis formatting ---
+    #     base_ax.xaxis.set_major_formatter(DateFormatter(xaxis_format))
+    #     base_ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    #     base_ax.set_xlabel("Time")
+    #     base_ax.grid(True, which='both', axis='both', linestyle='--', alpha=0.4)
+    #
+    #     # major ticks every 1 minute
+    #     tick_interval = 1.0  # minutes
+    #     base_ax.xaxis.set_major_locator(MultipleLocator(tick_interval))
+    #
+    #     # format labels as M:SS (or MM:SS if you prefer leading zeros)
+    #     base_ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{int(x):02d}:00"))
+    #
+    #     # always start at 0
+    #     base_ax.set_xlim(left=0)
+    #
+    #     # grid lines at those tick marks
+    #     base_ax.grid(True, which='major', axis='x', linestyle='--', alpha=0.4)
+    #
+    #     plt.setp(base_ax.get_xticklabels(), rotation=90, ha='right')
+    #
+    #     # --- legend ---
+    #     labels = [l.get_label() if hasattr(l, 'get_label') else l[0].get_label() for l in lines]
+    #     base_ax.legend(
+    #         lines,
+    #         labels,
+    #         loc='lower right',  # inside the plot
+    #         frameon=False,
+    #         framealpha=0.9,
+    #         facecolor='white',
+    #         edgecolor='gray'
+    #     )
+    #
+    #     pt = plot_title or "Hydro-Sediment Time Series"
+    #     plt.title(pt)
+    #     plt.tight_layout()
+    #     fig.savefig(output_path)
+    #     plt.close(fig)
+    #     return
 
     def load_measurements(self):
         msrmsnts = None
@@ -1690,13 +2076,20 @@ class Run:
         """
         fallow_crop_id = 1
 
-        return self.runoffdb.get_runs(date_from=self.datetime.strftime("%Y-%m-%d"),
-                               date_to=self.datetime.strftime("%Y-%m-%d"),
+        candidates = self.runoffdb.get_runs(date_from=self.datetime,
+                               date_to=self.datetime,
                                localities=self.locality_id,
                                simulators=self.simulator_id,
                                crops=fallow_crop_id,
                                run_types=self.run_type_id
                                 )
+
+        winners = []
+        for r in candidates:
+            if self.plot.plot_length == r.plot.plot_length and self.plot.plot_width == r.plot.plot_width:
+                winners.append(r)
+
+        return winners
 
 class Measurement:
     def __init__(self, runoffdb, **kwargs):
@@ -2022,6 +2415,7 @@ class Record:
                 return remove_last_zero_row(self.data)
             else:
                 if not self.data.empty:
+
                     if demand_timeline and not isinstance(self.data.index, pd.TimedeltaIndex):
                         raise DataframeNotTimeIndexed(self.id)
                     else:
@@ -2089,7 +2483,7 @@ class Record:
         meta.update({"quality index": self.runoffdb.quality_index[self.quality_index_id].name[lang]}) if self.quality_index_id is not None else None
 
         meta.update({"record type": self.runoffdb.record_types[self.record_type_id].name[lang]})
-        meta.update({"source records": [r for r in self.get_source_records()]}) if self.get_source_records() is not None else None
+        meta.update({"source records ids": [r for r in self.source_ids]}) if self.source_ids is not None else None
 
         return meta
 
@@ -2240,7 +2634,16 @@ class Plot:
             return ids, measures
 
     def get_protection_measures_names(self, lang):
-        return ", ".join([m.name[lang] for m in self.protection_measures]) if self.protection_measures else ""
+        if self.protection_measures:
+            outlist = []
+            for m in self.protection_measures:
+                # if the protection measure name is missing in requested language it must be resolved
+                if m.name[lang] is not None:
+                    outlist.append(m.name[lang])
+                else:
+                    outlist.append(f"*missing name in '{lang}'*")
+            return ", ".join([msr for msr in outlist])
+        return None
 
     def get_last_run_datetime(self):
         with self.runoffdb.get_connection() as dbcon:
@@ -2309,8 +2712,35 @@ class Plot:
             meta.update({"soil origin locality": self.runoffdb.localities[self.soil_origin_locality_id].name})
         return meta
 
-    def get_notes(self, lang="en"):
-        return self.note[lang]
+    def get_note(self, lang="en", remove=None, no_data_value=None):
+        """
+        Return the note for the given language, with characters replaced
+        according to the `remove` mapping. Handles \n, \r\n, \\n safely.
+        """
+        note = self.note.get(lang)
+
+        if not note:  # None or empty string
+            return no_data_value
+
+        # Default forbidden characters
+        default_remove = {
+            ";": ",",
+            "\r\n": ".",
+            "\n": ".",
+            "\r": ".",
+            "\\n": ".",  # literal backslash-n if stored as escaped
+        }
+
+        # Merge user-provided mapping
+        if remove:
+            default_remove.update(remove)
+
+        # Apply all replacements
+        for bad, replacement in default_remove.items():
+            note = note.replace(bad, replacement)
+
+        return note
+
 class Crop:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -2345,7 +2775,7 @@ class Agrotechnology:
 
     @classmethod
     def load_all_operations(cls, runoffdb):
-        print("loading tillage operations to establish agrotechnologies ...\n")
+        print("\nloading tillage operations to establish agrotechnologies ...")
         with runoffdb.get_connection() as dbcon:
             with dbcon.cursor(dictionary=True) as thecursor:
                 # execute the query and fetch the results
@@ -3079,76 +3509,98 @@ def integrate_data_series(df, series_name_in, series_name_out, interpolate=True,
 
     return df
 
-def get_value_in_time(df, timedelta, series_name, zero_time=None, interpolate=True, extrapolate=None):
+def get_value_in_time(
+    df, timedelta, series_name, zero_time=None,
+    interpolate=True, extrapolate=None, fallback="previous"
+):
     """
-    Returns interpolated value of dataseries in time specified as timedelta
+    Returns interpolated or extrapolated value of data series at the specified timedelta.
 
-    :param timedelta: the time point at which to get the value
-    :param series_name: column name of the series to be interpolated
-    :param zero_time: presumed time of start of the series (value = 0)
-    :param extrapolate: range of extrapolation specified as a multiplier of the last interval
-    :param interpolate: whether to interpolate values if exact match not found
-    :returns: interpolated/extrapolated value if available based on specified inputs, otherwise None
+    :param df: DataFrame with a TimedeltaIndex.
+    :param timedelta: the time point at which to get the value.
+    :param series_name: column name of the series to be interpolated/extrapolated.
+    :param zero_time: presumed time of start of the series (value = 0).
+    :param interpolate: whether to interpolate values if exact match not found.
+    :param extrapolate: range of extrapolation specified as a multiplier of the last interval.
+    :param fallback: behavior when interpolate=False and requested time is between values.
+                     Options:
+                        - "previous" (default): return the last valid value before timedelta
+                        - "error": raise RequestedTimeDeltaValueMissing
+                        - None: return None
+    :returns: interpolated/extrapolated/last-valid value based on specified inputs, otherwise None.
     """
 
     # ensure dataframe is time-indexed
     if not isinstance(df.index, pd.TimedeltaIndex):
         raise ValueError("DataFrame index must be of type TimedeltaIndex.")
 
-    first_time = df.index[0]
-    last_time = df.index[-1]
+    try:
+        first_time = df.index[0]
+        last_time = df.index[-1]
+    except IndexError:
+        return None
 
-    # if timedelta is in the index, return the exact value directly
+    # exact match
     if timedelta in df.index:
         return df.loc[timedelta, series_name]
 
-    # if timedelta is before the first value
+    # before first value
     if timedelta < first_time:
-        # if the zero time was specified, extrapolate to zero
         if zero_time:
-            print(" - extrapolating to zero\n\n")
-            return (df.loc[first_time, series_name] / (first_time - zero_time).total_seconds()) * (timedelta - zero_time).total_seconds()
+            # print(" - extrapolating to zero\n")
+            return (df.loc[first_time, series_name] / (first_time - zero_time).total_seconds()) * \
+                   (timedelta - zero_time).total_seconds()
         else:
-            print(f"Requested time is before the first record in '{series_name}' data series and extrapolation to zero was not requested.\n")
+            print(f"Requested time is before the first record in '{series_name}' and extrapolation to zero was not requested.\n")
             return None
 
-    # if time is after the last value
+    # after last value
     elif timedelta > last_time:
         if extrapolate:
             if df[series_name].size > 1:
-                # duration of last step in series
+                # returns last recorded value
+                if extrapolate == -1:
+                    return df.iloc[-1][series_name]
+                # check duration of last step
                 last_step_duration = df.index[-1] - df.index[-2]
-
-                # if the desired timedelta is within 'extrapolate' times last interval duration from series end
                 if (timedelta - df.index[-1]) < extrapolate * last_step_duration:
-                    print(" - extrapolating after series end\n")
-
-                    v1 = df.loc[df.index[-2], series_name]
-                    v2 = df.loc[df.index[-1], series_name]
-                    t1 = df.index[-2]
-                    t2 = df.index[-1]
-                    t3 = timedelta
-
-                    if (t3 - t2) < extrapolate * (t2 - t1):
-                        return v2 + (t3 - t2).total_seconds() * ((v2 - v1) / (t2 - t1).total_seconds())
-
+                    # print(" - extrapolating after series end\n")
+                    v1, v2 = df.iloc[-2][series_name], df.iloc[-1][series_name]
+                    t1, t2 = df.index[-2], df.index[-1]
+                    return v2 + (timedelta - t2).total_seconds() * ((v2 - v1) / (t2 - t1).total_seconds())
             else:
                 print(f"Data series '{series_name}' doesn't have enough values for extrapolation.\n")
                 return None
         else:
-            print(f"Requested timedelta is after last record of '{series_name}' data series and extrapolation was not requested.\n")
-            return None
+            raise RequestedTimeDeltaValueMissing(
+                series_name, timedelta,
+                f"Requested timedelta is after last record in the data series and extrapolation was not requested.\n"
+            )
 
-    # interpolate the output value if `interpolate=True`
+    # within series range
     if interpolate:
-        # reindex the dataframe to include the requested timedelta
+        # linear interpolation
         df_with_requested_time = df.reindex(df.index.union([timedelta]))
-        # use linear interpolation
         interpolated_series = df_with_requested_time[series_name].interpolate(method='time')
-        # retrieve the interpolated value
-        interpolated_value = interpolated_series.loc[timedelta]
-        return interpolated_value
+        return interpolated_series.loc[timedelta]
+
+    # fallback behavior when interpolate=False
+    prev_times = df.index[df.index < timedelta]
+    if prev_times.empty:
+        print(f"No earlier values found in '{series_name}' for the requested timedelta.\n")
+        return None
+
+    if fallback == "previous":
+        last_valid_time = prev_times[-1]
+        # print(f" - using previous value from {last_valid_time}\n")
+        return df.loc[last_valid_time, series_name]
+    elif fallback == "error":
+        raise RequestedTimeDeltaValueMissing(
+            series_name, timedelta,
+            f"Requested timedelta is between index values of data series and interpolation was not requested.\n"
+        )
     else:
+        # print(f"Interpolation disabled and fallback=None — returning None for '{series_name}'.\n")
         return None
 
 def integrate_flow(df, value_col, duration_col, placement="start",

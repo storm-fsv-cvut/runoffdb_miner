@@ -22,3 +22,14 @@ class DataframeNotTimeIndexed(Exception):
     """
     def __init__(self, record_id):
         self.message = f"data of record #{record_id} are not timeline data and should be"
+
+class RequestedTimeDeltaValueMissing(Exception):
+    """
+    This exception is raised when value for specific TimeDelta is requested from a dataframe but no value exists for that index.
+    Raise this exception when interpolation and/or extrapolation in the data is not desired.
+    """
+    def __init__(self, series_name, timedelta_index, message=None):
+        self.message = f"Data value is not available in requested time ({timedelta_index}) without using interpolation/extrapolation for series '{series_name}'."
+
+        if message:
+            self.message += f"\n{message}"
