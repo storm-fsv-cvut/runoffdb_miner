@@ -5,15 +5,18 @@ import os
 import pandas as pd
 from datetime import datetime, time, date
 import numpy as np
-import json
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
-from matplotlib.dates import DateFormatter
-import matplotlib.dates as mdates
 from matplotlib.ticker import MultipleLocator, FuncFormatter
 
 from src.db_access import DBconnector
 from src.exceptions import DataframeEmptyError, RecordSetNotComplete, DataframeNotTimeIndexed, RequestedTimeDeltaValueMissing
+
+
+## global constants bound to the particular RunoffDB instance
+# ID values of specific entity instances that posses some special qualities
+CULTIVATED_FALLOW_CROP_ID = 1
+MAIN_CROP_SEEDING_OPERATION_TYPE_ID = 3
+AUX_CROP_SEEDING_OPERATION_TYPE_ID = 8
 
 # multipliers for different units to convert between each other
 multipliers = {1: {1: 1},
@@ -23,6 +26,16 @@ multipliers = {1: {1: 1},
                18: {18: 1, 27: 0.001},
                27: {18: 1000, 27: 1},
                32: {6: 60, 32: 1}}
+
+RUNOFF_RATE_LMIN_UNIT_ID = 1  # in l.min-1
+SS_CONCENTRATION_GL_UNIT_ID = 3  # in g.l-1
+RAINFALL_INTENSITY_MMH_UNIT_ID = 6  # in mm.hour-1
+SEDIMENT_FLUX_GMIN_UNIT_ID = 23  # in g.min-1
+
+# run types
+DRY_RUN_TYPE_ID = 1
+VERY_WET_RUN_TYPE_ID = 2
+WET_RUN_TYPE_ID = 3
 
 class RunoffDB:
     agrotechnologies_table = "`agrotechnology`"
@@ -106,11 +119,20 @@ class RunoffDB:
 
         # do not load the runs as they might be limited by filters
         self.runs = {}
-
+        # sequences to runs mapping
+        self.sequences = {}
         self.log_file_path = log_file_path
         self.run_log = {}
         print("\n... everything is ready.")
         print(80*"="+"\n")
+
+        # if filters were applied on load
+        self.filter_date_from = None
+        self.filter_date_to = None
+        self.filter_simulators = None
+        self.filter_localities = None
+        self.filter_crops = None
+        self.filter_with_runoff_only = None
 
     def __enter__(self):
         return self
@@ -148,6 +170,9 @@ class RunoffDB:
             # delete the file if already exists
             if os.path.isfile(output_path):
                 os.remove(output_path)
+            # create the folder if not exists to avoid log writing error on early crash
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
             with open(output_path, "a") as f:
                 for run_id, logs in self.run_log.items():
                     run = self.runs.get(run_id)
@@ -161,15 +186,18 @@ class RunoffDB:
     def clear_log(self):
         self.run_log = {}
 
-    def load_runs(self, limit=None, date_from=None, date_to=None, simulators=None, localities=None, crops=None, run_id=None):
+    def load_runs(self, date_from=None, date_to=None, simulators=None, localities=None, crops=None, run_id=None, with_runoff_only=False, limit=None):
         """
         Loads Run objects from database filtered to match given limitations. Loads all simulation runs if no filtres provided.
-        :param limit: number of runs to load
+        Fills the self.runs dictionary with runs indexed by their ID
         :param date_from: load runs older than ('YYYY-MM-DD' format)
         :param date_to: load runs younger than ('YYYY-MM-DD' format)
         :param simulators: load runs performed with given simulator/s (list of simulator IDs)
         :param localities: load runs performed on given locality/localities (list of locality IDs)
         :param crops: load runs performed on a plot with given crop/s (list of crop IDs)
+        :param with_runoff_only: load runs where runoff initiated only
+        :param limit: number of runs to load
+        :param run_id:
         :return:
         """
         # convert everything to lists if not already
@@ -215,9 +243,14 @@ class RunoffDB:
                         f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
                         f"JOIN {self.plots_table} ON {self.runs_table}.`plot_id` = {self.plots_table}.`id` " \
                         f"JOIN {self.crops_table} ON {self.plots_table}.`crop_id` = {self.crops_table}.`id` " \
-                        f"WHERE `runoff_start` IS NOT NULL AND (`deleted` = 0 OR `deleted` IS NULL) "
+                        f"WHERE (`deleted` = 0 OR `deleted` IS NULL) "
+                if with_runoff_only:
+                    query += " AND`runoff_start` IS NOT NULL "
                 if run_id is not None:
-                    query += f" AND {self.runs_table}.`id` = {run_id}"
+                    if isinstance(run_id, list):
+                        query += f" AND {self.runs_table}.`id` IN ({', '.join(run_id)})"
+                    else:
+                        query += f" AND {self.runs_table}.`id` = {run_id}"
                 else:
                     if date_from is not None:
                         query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
@@ -247,17 +280,29 @@ class RunoffDB:
                 if thecursor.rowcount > 0:
                     for r in results:
                         new = Run(self, **r)
-                        new.plot = self.plots.get(new.plot_id)
                         # new_run.show_details()
                         run_dict.update({new.id: new})
+
                     thecursor.close()
                     self.runs.update(run_dict)
+
+                    # fill the sequences property
+                    self.order_runs_by_sequence(list(run_dict.values()))
+
+                    # store filters
+                    self.filter_date_from = date_from
+                    self.filter_date_to = date_to
+                    self.filter_simulators = simulators
+                    self.filter_localities = localities
+                    self.filter_crops = crops
+                    self.filter_with_runoff_only = with_runoff_only
+
                     return run_dict
             return None
 
     def get_runs(self, date_from=None, date_to=None, run_types=None, simulators=None, localities=None, crops=None, plots=None):
         """
-        Returns filtered list of runs from own list of runs
+        Returns filtered list of runs from self.runs dictionary
 
         :param date_from:
         :param date_to:
@@ -288,6 +333,8 @@ class RunoffDB:
             result = [r for r in result if r.datetime >= datetime.combine(date_from, time(0, 0, 0))]
         if date_to is not None:
             result = [r for r in result if r.datetime <= datetime.combine(date_to, time(23, 59, 59))]
+
+            print(f"simulators in get_runs: {simulators}")
 
         # filter by categorical ids
         if run_types is not None:
@@ -712,6 +759,21 @@ class RunoffDB:
             print(str(loc))
         return
 
+    def show_plots(self, lang="en"):
+        for plot in self.plots.values():
+            plot.show_properties(lang=lang)
+        return
+
+    def show_simulators(self, lang="en"):
+        for simulator in self.simulators.values():
+            simulator.show_properties(lang=lang)
+
+        return
+
+    def show_methodics(self, lang="en"):
+        for meth in self.methodics.values():
+            meth.show_details(lang)
+
     def show_run_records(self, lang="en", indent=0):
         """
 
@@ -750,6 +812,36 @@ class RunoffDB:
 
     def get_all_quality_indexes(self):
         return [k for k in self.quality_index.keys()]
+
+    def order_runs_by_sequence(self, runs_list, order_by_run_type=True):
+        """
+        Cretes a dictionary with runs grouped by their sequence
+        :param runs_list:
+        :return:
+        """
+        if isinstance(runs_list, dict):
+            runs_list = list(runs_list.values())
+
+        sequences = {}
+        for r in runs_list:
+            # store to {sequence_id: [Run, ...]} mapping
+            if r.sequence_id not in sequences.keys():
+                sequences.update({r.sequence_id: [r]})
+            else:
+                sequences[r.sequence_id].append(r)
+
+        if order_by_run_type:
+            # sort the runs within sequence: dry - very wet - wet
+            self.sort_sequences_by_run_type()
+        return sequences
+
+    def sort_sequences_by_run_type(self):
+        """
+        Sorts each list of runs in self.sequences by run.run_type_id.
+        """
+        for seq_id, run_list in self.sequences.items():
+            # in-place sort of each list
+            run_list.sort(key=lambda r: r.run_type_id)
 
     def find_orphan_records(self):
         return
@@ -1005,7 +1097,7 @@ class Run:
             print(f"\trun #{self.id} doesn't have dedicated rainfall intensity record ID assigned")
             return None
 
-    def get_rainfall_intensity_value(self, target_unit_id = None):
+    def get_rainfall_intensity_value(self, target_unit_id=None):
         try:
             intensity_data = self.get_rainfall_intensity_timeline(target_unit_id, "rain_intensity")
         except DataframeEmptyError:
@@ -1159,7 +1251,6 @@ class Run:
 
         return None
 
-
     def get_best_bulk_density_redord(self):
         # try getting dedicated bulk density record
         if self.bulkd_ss is not None:
@@ -1213,10 +1304,10 @@ class Run:
 
         # default units
         default_units = {
-            "runoff": 1,  # in l.min-1
-            "sediment_concentration": 3,  # in g.l-1
-            "rainfall_intensity": 6,  # in mm.hour-1
-            "sediment_flux": 23,  # in g.min-1
+            "runoff": RUNOFF_RATE_LMIN_UNIT_ID,  # in l.min-1
+            "sediment_concentration": SS_CONCENTRATION_GL_UNIT_ID,  # in g.l-1
+            "rainfall_intensity": RAINFALL_INTENSITY_MMH_UNIT_ID,  # in mm.hour-1
+            "sediment_flux": SEDIMENT_FLUX_GMIN_UNIT_ID,  # in g.min-1
         }
 
         # default labels map
@@ -1265,6 +1356,10 @@ class Run:
         requested_keys = [k for k, v in requested.items() if v]
         present_records, missing_records, derived_sources, skipped_derived = self._resolve_present_records(requested_keys, dependencies, default_units)
 
+        print(f"present records: {present_records}")
+        print(f"missing records: {missing_records}")
+        print(f"derived sources: {derived_sources}")
+        print(f"derived skipped: {skipped_derived}")
         if missing_records:
             raise RecordSetNotComplete(requested_keys, missing_records)
 
@@ -1340,35 +1435,6 @@ class Run:
 
         return merged_data
 
-    # def get_info_headers(self, lang="en"):
-    #     """
-    #     Returns column header strings for basic simulation run properties as array with order corresponding to
-    #     values order in 'get_info_array()'
-    #     :param lang: language string identifier (currently implemented 'en' and 'cz')
-    #     :return:
-    #     """
-    #
-    #     headers = {"cz": ["ID sekvence", "ID simulace", "ID lokality", "lokalita", "datum", "ID plochy", "název plochy",
-    #                       "délka plochy [m]",
-    #                       "šířka plochy [m]", "sklon plochy [%]", "poznámky k ploše", "dnů od zasetí",
-    #                       "ochranné opatření", "ID simulátoru", "simulátor",
-    #                       "ID plodiny", "plodina", "stav plodiny", "výška plodiny [cm]", "počet rostlin [1/m2]", "BBCH",
-    #                       "zakrytí povrchu [%]",
-    #                       "počáteční stav", "počáteční vlhkost", "<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
-    #                       "objemová hmotnost [g/cm3]", "intenzita srážky [mm/h]",
-    #                       "TTR"],
-    #                "en": ["sequence ID", "run ID", "locality ID", "locality", "date", "plot ID", "plot name",
-    #                       "plot length [m]",
-    #                       "plot width [m]", "plot slope [%]", "plot notes", "days since seeding",
-    #                       "soil protection measure",
-    #                       "simulator ID", "simulator", "crop ID", "crop", "crop condition", "crop height [cm]",
-    #                       "plant density [pcs.m^2]", "BBCH", "surface cover [%]",
-    #                       "initial cond.", "init. moisture", "<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>",
-    #                       "bulk density [g.cm-3]", "rain intensity [mm.h-1]",
-    #                       "time to runoff"]}
-    #     if lang not in headers.keys():
-    #         raise ValueError()
-    #     return headers[lang]
 
     def get_info_array(self, line=None, no_data_value=None, lang="en"):
         """
@@ -1431,7 +1497,7 @@ class Run:
         line.append(self.plot.get_note(lang=lang, no_data_value=no_data_value))
         headers["cz"].append("dnů od zasetí")
         headers["en"].append("days since seeding")
-        line.append(self.plot.days_since_seeding(self.datetime) or no_data_value)
+        line.append(self.plot.days_since_seeding(self.datetime, main_crop_only=True) or no_data_value)
         headers["cz"].append("ochranná opatření")
         headers["en"].append("soil protection measures")
         line.append(self.plot.get_protection_measures_names(lang) or no_data_value)
@@ -1498,13 +1564,13 @@ class Run:
             line.append(no_data_value)
             self.runoffdb.log(self.id, f"bulk density data missing: {dee.message}")
 
-        headers["cz"].append("intenzita srážky [mm/h]")
-        headers["en"].append("rain intensity [mm.h-1]")
-        try:
-            line.append(self.get_rainfall_intensity_value(6) or no_data_value)
-        except DataframeEmptyError as dee:
-            line.append(no_data_value)
-            self.runoffdb.log(self.id, f"rainfall intensity data missing: {dee.message}")
+        # headers["cz"].append("intenzita srážky [mm/h]")
+        # headers["en"].append("rain intensity [mm.h-1]")
+        # try:
+        #     line.append(self.get_rainfall_intensity_value(6) or no_data_value)
+        # except DataframeEmptyError as dee:
+        #     line.append(no_data_value)
+        #     self.runoffdb.log(self.id, f"rainfall intensity data missing: {dee.message}")
 
         headers["cz"].append("TTR")
         headers["en"].append("time to runoff")
@@ -2014,7 +2080,7 @@ class Run:
                         print("Records of more types were found. Specify record type for unambiguous results.")
 
                 for rec in found_records:
-                    data = rec.load_data("plot_x", indexColumn="plot_x")
+                    data = rec.load_data("plot_x", index_column="plot_x")
 
                     print(data[data['plot_x'] == data['plot_x'].max()])
 
@@ -2074,15 +2140,13 @@ class Run:
         (another run executed at the same day at the same location with same simulator)
         :return:
         """
-        fallow_crop_id = 1
 
         candidates = self.runoffdb.get_runs(date_from=self.datetime,
                                date_to=self.datetime,
                                localities=self.locality_id,
                                simulators=self.simulator_id,
-                               crops=fallow_crop_id,
-                               run_types=self.run_type_id
-                                )
+                               crops=CULTIVATED_FALLOW_CROP_ID,
+                               run_types=self.run_type_id)
 
         winners = []
         for r in candidates:
@@ -2090,6 +2154,7 @@ class Run:
                 winners.append(r)
 
         return winners
+
 
 class Measurement:
     def __init__(self, runoffdb, **kwargs):
@@ -2111,7 +2176,7 @@ class Measurement:
         self.note = {"cz": self.note_cz, "en": self.note_en}
         self.records = None
 
-    def show_details(self, indent = "", t = "- "):
+    def show_details(self, indent="", t="- "):
         indent += t
         print(indent+f"measurement_id: {self.id}")
         indent += t
@@ -2134,7 +2199,6 @@ class Measurement:
             print(indent+f"records:")
             for rec in self.records:
                 rec.show_details(indent)
-
 
     def load_records(self):
         """
@@ -2453,6 +2517,7 @@ class Record:
             multiply_by = multipliers.get(self.unit_id).get(target_unit_id)
             if not multiply_by:
                 print(f"Unit id {self.unit_id} doesn't have multiplier defined for conversion to unit id {target_unit_id}!")
+                print(multipliers)
                 return None
             elif multiply_by != 1:
                 if remove_last_zero:
@@ -2465,9 +2530,6 @@ class Record:
                 return self.data
         else:
             return None
-
-    # def get_source_records(self):
-    #     return self.runoffdb.get_record_source_records(self)
 
     def get_metadata(self, lang="en"):
         meta = {"record ID": self.id,
@@ -2660,20 +2722,20 @@ class Plot:
 
             return None
 
-    def days_since_seeding(self, datetime):
+    def days_since_seeding(self, datetime, main_crop_only=False):
         # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
-        if self.crop_id == 1:
+        if self.crop_id == CULTIVATED_FALLOW_CROP_ID:
             return None
         else:
             if self.agrotechnology is not None:
-                return self.agrotechnology.days_since_seeding(datetime)
+                return self.agrotechnology.days_since_seeding(datetime, main_crop_only=main_crop_only)
             else:
                 print(f"\tplot {self.id} has no agrotechnology assigned")
                 return None
 
     def days_since_last_operation(self):
         # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
-        if self.crop_id == 1:
+        if self.crop_id == CULTIVATED_FALLOW_CROP_ID:
             return 0
         else:
             if self.agrotechnology is not None:
@@ -2711,6 +2773,18 @@ class Plot:
         if self.soil_origin_locality_id is not None and self.soil_origin_locality_id != self.locality_id:
             meta.update({"soil origin locality": self.runoffdb.localities[self.soil_origin_locality_id].name})
         return meta
+
+    def show_properties(self, lang="en"):
+        print(f"\n{self.id} - {self.name}")
+        print(f"\testablished: {czech_date(self.established)}")
+        print(f"\tlength: {self.plot_length}m")
+        print(f"\tplot width: {self.plot_width}m")
+        print(f"\tslope steepness: {self.plot_slope}%")
+
+        print(f"\tprotection measures: {'none' if not self.protection_measures else ''}")
+        for measure in self.protection_measures:
+            print(f"\t\t{measure.id} - {measure.name['cz']}")
+        return
 
     def get_note(self, lang="en", remove=None, no_data_value=None):
         """
@@ -2857,7 +2931,7 @@ class Agrotechnology:
                 return True
         return False
 
-    def days_since_seeding(self, input_datetime):
+    def days_since_seeding(self, input_datetime, main_crop_only=False):
         # check if the input is a datetime or a date
         if isinstance(input_datetime, datetime):
             # extract just the date if it's a datetime
@@ -2871,10 +2945,12 @@ class Agrotechnology:
         for operation_date in sorted(self.operation_sequence.keys(), reverse=True):
             if operation_date <= the_date:
                 # Check if the operation type is "seeding"
-                if self.operation_sequence[operation_date].operation_type_id == 3:
+                if main_crop_only and self.operation_sequence[operation_date].operation_type_id == MAIN_CROP_SEEDING_OPERATION_TYPE_ID:
                     # Return the number of days since the last seeding
                     return (the_date - operation_date).days
-        # If no "seeding" operation was found, return None or a suitable value (e.g. -1)
+                elif self.operation_sequence[operation_date].operation_type_id == MAIN_CROP_SEEDING_OPERATION_TYPE_ID or self.operation_sequence[operation_date].operation_type_id == AUX_CROP_SEEDING_OPERATION_TYPE_ID:
+                    return (the_date - operation_date).days
+        # if no seeding operation was found, return None
         return None
 
     def days_since_last_operation(self, input_datetime):
@@ -2990,6 +3066,16 @@ class Simulator:
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
         self.organization = self.runoffdb.organizations[self.organization_id]
+
+    def show_properties(self, lang="en"):
+        print(f"\n{self.id} - {self.name[lang]}")
+        print(f"\tdescription: {self.description[lang]}")
+        print(f"\torganization: {self.organization.name}")
+
+        print(f"\tliterature references: {'none' if not self.reference else ''}")
+
+        return
+
     def get_metadata(self, lang="en"):
         meta = {"name": self.name[lang]}
         if self.description is not None :
@@ -3202,11 +3288,12 @@ class Method:
                     return sequence
 
     def show_details(self, lang="en", indent=""):
-        print(f"Methodics {self.id} - {self.name[lang]}")
-        print(f"{self.description[lang]}")
-        print(f"\nprocessing steps:")
+        print(f"\nMethodics {self.id} - {self.name[lang]}")
+        print(f"{self.description[lang] if self.description[lang] else 'no description'}")
+        print(f"\nprocessing steps:") if self.processing_steps_sequence else print(f"no processing steps defined")
+
         for i, prs in enumerate(self.processing_steps_sequence, start=1):
-            print(f"\t{i}")
+            print(f"\t{i})")
             prs.show_details(lang, indent)
 
     def export_to_json(self, lang="en", include_ids=False):
@@ -3258,13 +3345,13 @@ class ProcessingStep:
 
     def show_details(self, lang="en", indent=""):
         indent += "\t"
-        print(f"{indent}{self.name[lang]}")
-        print(f"{indent}{self.description[lang]}") if self.description[lang] else None
+        print(f"{indent}{self.name[lang]}{(' - '+self.description[lang]) if self.description[lang] else ''}")
         if self.instruments:
-            print(f"\n{indent}instruments used:")
+            print(f"{indent}instruments used:")
+            indent += "\t"
             for instr in self.instruments:
                 instr.show_details(lang, indent)
-        print("\n")
+
     def export_to_json(self, lang="en", include_ids=False):
         export = {}
         if include_ids:
@@ -3394,7 +3481,7 @@ def get_zero_time(dataframe, series_name):
     if dataframe.index.size > 1:
         # check the direction of the first interval and break if extrapolation is not possible
         if (dataframe[series_name].iloc[1] - dataframe[series_name].iloc[0]) == 0:
-            print("Zero time value couldn't be extrapolated because the value in first interval is constant.\n");
+            print("Zero time value couldn't be extrapolated because the value in first interval is constant.\n")
             return None
         elif (dataframe[series_name].iloc[1] - dataframe[series_name].iloc[0]) < 0:
             print("Zero time value couldn't be extrapolated because the value in first interval is decreasing.\n")

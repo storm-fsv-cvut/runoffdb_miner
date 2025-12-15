@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-
-from datetime import timedelta
 import os
+from datetime import timedelta
+import json
 import math
 import locale
 import re
@@ -103,7 +103,7 @@ class Miner:
         date_from = date_from or self.date_from
         date_to = date_to or self.date_to
 
-        self.runoffdb.load_runs(date_from=date_from, date_to=date_to, simulators=simulators, localities=localities, crops=crops)
+        self.runoffdb.load_runs(date_from=date_from, date_to=date_to)
 
         try:
             os.mkdir(root_path) if not os.path.isdir(root_path) else None
@@ -296,8 +296,27 @@ class Miner:
             output_html.close()
         return
 
+    def generate_intervals_csv_by_simulator(self, output_dir, date_from=None, date_to=None, lang="en", no_data_value="NA", log_file=None):
 
-    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, lang="en", no_data_value="NA", log_file=None):
+        try:
+            os.mkdir(output_dir) if not os.path.isdir(output_dir) else None
+        except OSError as error:
+            print("Selected directory for the dump does not exist and it's not possible to create it.")
+            print("Dump failed.")
+            return
+
+        with self.runoffdb as rdb:
+            for simulator_id in rdb.simulators.keys():
+                filename = f"runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_sim{simulator_id}_{lang}.csv"
+                output_path = os.path.join(output_dir, filename)
+                self.generate_interval_values_csv(output_path,
+                                                  date_from=date_from,
+                                                  date_to=date_to,
+                                                  simulators=simulator_id,
+                                                  lang=lang,
+                                                  no_data_value=no_data_value, log_file=log_file)
+
+    def generate_interval_values_csv(self, output_path, date_from=None, date_to=None, simulators=None, lang="en", no_data_value="NA", log_file=None):
         """
         Generates runoff and sediment export for all simulation runs fitting into given limits.
         Each row in the output file represents a time interval in merged data of precipitation intensity, runoff rate, sediment concentration
@@ -315,7 +334,8 @@ class Miner:
         date_from = date_from or self.date_from
         date_to = date_to or self.date_to
 
-        self.runoffdb.load_runs(date_from=date_from, date_to=date_to)
+        self.runoffdb.load_runs(date_from=date_from, date_to=date_to, simulators=simulators, with_runoff_only=True)
+
         if not self.runoffdb.runs:
             print("\n\033[91mNo runs available within given limits.\033[00m\n")
             return
@@ -323,20 +343,27 @@ class Miner:
         with self.runoffdb as rdb:
             rdb.log_file_path = log_file
 
-            runs = rdb.get_runs(date_from=date_from, date_to=date_to)
+            runs = list(rdb.runs.values())
+            # runs = rdb.get_runs(date_from=date_from, date_to=date_to, simulators=simulators)
+            if not runs:
+                print(f"\nno simulation runs for given dates ({date_from.strftime('%Y-%m-%d') if date_from else ''} - {date_to.strftime('%Y-%m-%d') if date_to else ''}) on selected simulator(s) {simulators}")
+                return
 
             column_headers = {"cz": ["interval", "délka intervalu", "t1", "t2", "srážkový úhrn [mm]",
-                              "průtok [l/min]", "celkový odtok [l]", "koncentrace sedimentu [g/l]", "tok sedimentu[g/min]",
+                              "průtok [l/min]", "celkový odtok [l]", "koncentrace sedimentu [g/l]", "tok sedimentu [g/min]",
                               "ztráta půdy [g]"],
                      "en": ["interval #", "interval duration", "t1", "t2", "rainfall total [mm]",
                             "flow rate [l.min-1]", "total discharge [l]", "SS concentration [g.l-1]", "SS flux [g.min-1]",
-                            "sediment yield[g]"]}
+                            "sediment yield [g]"]}
 
             # open the output file for writing
-            output_csv = open(output_path, "w", encoding="utf-8")
-
+            try:
+                output_csv = open(output_path, "w", encoding="utf-8")
+            except PermissionError:
+                print(f"\033[91mspecified output file '{output_path}' is being used by another application\033[00m")
+                return
             # get the run properties column headers from the first run
-            headers = runs[0].get_info_array(lang=lang)[1]
+            values, headers = runs[0].get_info_array(lang=lang)
             # extend with export specific column headers
             headers.extend(column_headers[lang])
 
@@ -369,6 +396,7 @@ class Miner:
                 sed_flux_label = "sediment_flux"
                 sed_yield_label = "sediment_yield"
 
+                # missing record of a requested value excludes the run from export
                 request = {
                     "rainfall_intensity": True,
                     "rainfall_total": True,
@@ -399,6 +427,7 @@ class Miner:
                                     f"\n\t=> Run was excluded from the export.")
                     continue
                 else:
+                    # print(hydro_data.columns)
                     hydro_data.fillna(no_data_value, inplace=True)
                     # in case all hydro-sediment data are empty
                     if hydro_data.empty:
@@ -1676,8 +1705,7 @@ class Miner:
                              simulators=None,
                              localities=None,
                              crops=None,
-                             log_file=None,
-                             no_data_value="NA",
+                             no_data_value="",
                              in_time=None,
                              interpolate=True):
 
@@ -1697,101 +1725,111 @@ class Miner:
         # use Miner date limits if no limits provided
         date_from = date_from or self.date_from
         date_to = date_to or self.date_to
-        # load the runs between dates
-        self.runoffdb.load_runs(date_from=date_from, date_to=date_to)
-        if not self.runoffdb.runs:
-            print("\n\033[91mNo runs available within given limits.\033[00m\n")
-            return
-
-        column_headers = {
-            "cz": ["t2", "srážková intenzita [mm/min]", "srážkový úhrn [mm]", "průtok [l/min]", "celkový odtok [l]",
-                   "koncentrace sedimentu [g/l]", "tok sedimentu[g/min]", "ztráta půdy [g]", "SLR"
-                   ],
-            "en": ["t2", "rainfall intensity [mm.min-1]", "rainfall total [mm]", "flow rate [l.min-1]", "total discharge [l]",
-                   "SS concentration [g.l-1]", "SS flux [g.min-1]", "sediment yield[g]", "SLR"
-                   ]
-        }
-        # separators for the export to CSV
-        local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
-        #
-        # # hydrodata request and labels definition
-        # rain_int_label = "rainfall_intensity"
-        # rain_tot_label = "rainfall_total"
-        # runoff_label = "runoff"
-        # discharge_label = "discharge"
-        # sed_conc_label = "sediment_concentration"
-        # sed_flux_label = "sediment_flux"
-        # sed_yield_label = "sediment_yield"
-
-        rain_int_label = "rainfall intensity [mm.hour-1]"
-        rain_tot_label = "rainfall total [mm]"
-        runoff_label = "runoff [l.s-1]"
-        discharge_label = "discharge [l]"
-        sed_conc_label = "sediment concentration [g.l-1]"
-        sed_flux_label = "sediment flux [g.min-1]"
-        sed_yield_label = "sediment yield [g]"
-
-        labels = {
-            "rainfall_intensity": rain_int_label,
-            "rainfall_total": rain_tot_label,
-            "runoff": runoff_label,
-            "sediment_concentration": sed_conc_label,
-            "discharge": discharge_label,
-            "sediment_flux": sed_flux_label,
-            "sediment_yield": sed_yield_label
-        }
-        # all requests are False to get all runs
-        request = {"runoff": True,
-                   "sediment_flux": True}
-
-        if interpolate:
-            # settings for interpolated values
-            interpolate = True
-            extrapolate = 2
-            interpolations = {
-                rain_tot_label: "linear",
-                runoff_label: "linear",
-                sed_conc_label: "linear",
-                sed_flux_label: "linear"
-            }
-
-            plots = {
-                rain_tot_label: "line",
-                runoff_label: "line",
-                sed_conc_label: "line",
-                sed_flux_label: "line"
-            }
-        else:
-            # settings for stepwise values
-            extrapolate = -1
-            interpolations = {
-                rain_tot_label: "linear",
-                runoff_label: "ffill",
-                sed_conc_label: "ffill",
-                sed_flux_label: "ffill"
-            }
-
-            plots = {
-                rain_tot_label: "line",
-                runoff_label: "step",
-                sed_conc_label: "step",
-                sed_flux_label: "step"
-            }
-
-
-        # self.runoffdb.load_runs(date_from=date_from, date_to=date_to)
-
         with self.runoffdb as rdb:
-            rdb.log_file_path = log_file
+            # load the runs between dates
+            runs = self.runoffdb.load_runs(date_from=date_from,
+                                           date_to=date_to,
+                                           simulators=simulators,
+                                           localities=localities,
+                                           crops=crops,
+                                           with_runoff_only=False)
 
-            runs = rdb.get_runs(date_from=date_from, date_to=date_to, simulators=simulators, localities=localities,
-                                crops=crops)
+            if not runs:
+                print("\n\033[91mNo runs available within given limits.\033[00m\n")
+                return
+
+            # get ordering grouped by sequence
+            sequences = rdb.order_runs_by_sequence(runs)
+
+            column_headers = {
+                "cz": ["t2", "srážková intenzita [mm/min]", "srážkový úhrn [mm]", "průtok [l/min]", "celkový odtok [l]",
+                       "koncentrace sedimentu [g/l]", "tok sedimentu[g/min]", "ztráta půdy [g]", "SLR", "SLR průměr"
+                       ],
+                "en": ["t2", "rainfall intensity [mm.min-1]", "rainfall total [mm]", "flow rate [l.min-1]", "total discharge [l]",
+                       "SS concentration [g.l-1]", "SS flux [g.min-1]", "sediment yield[g]", "SLR", "SLR averaged"
+                       ]
+            }
+            # separators for the export to CSV
+            local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
+            #
+            # # hydrodata request and labels definition
+            # rain_int_label = "rainfall_intensity"
+            # rain_tot_label = "rainfall_total"
+            # runoff_label = "runoff"
+            # discharge_label = "discharge"
+            # sed_conc_label = "sediment_concentration"
+            # sed_flux_label = "sediment_flux"
+            # sed_yield_label = "sediment_yield"
+
+            rain_int_label = "rainfall intensity [mm.hour-1]"
+            rain_tot_label = "rainfall total [mm]"
+            runoff_label = "runoff [l.s-1]"
+            discharge_label = "discharge [l]"
+            sed_conc_label = "sediment concentration [g.l-1]"
+            sed_flux_label = "sediment flux [g.min-1]"
+            sed_yield_label = "sediment yield [g]"
+
+            labels = {
+                "rainfall_intensity": rain_int_label,
+                "rainfall_total": rain_tot_label,
+                "runoff": runoff_label,
+                "sediment_concentration": sed_conc_label,
+                "discharge": discharge_label,
+                "sediment_flux": sed_flux_label,
+                "sediment_yield": sed_yield_label
+            }
+            # all requests are False to get all runs
+            request = {"runoff": True,
+                       "sediment_flux": True}
+
+            if interpolate:
+                # settings for interpolated values
+                interpolate = True
+                extrapolate = 2
+                interpolations = {
+                    rain_tot_label: "linear",
+                    runoff_label: "linear",
+                    sed_conc_label: "linear",
+                    sed_flux_label: "linear"
+                }
+
+                plots = {
+                    rain_tot_label: "line",
+                    runoff_label: "line",
+                    sed_conc_label: "line",
+                    sed_flux_label: "line"
+                }
+            else:
+                # settings for stepwise values
+                extrapolate = -1
+                interpolations = {
+                    rain_tot_label: "linear",
+                    runoff_label: "ffill",
+                    sed_conc_label: "ffill",
+                    sed_flux_label: "ffill"
+                }
+
+                plots = {
+                    rain_tot_label: "line",
+                    runoff_label: "step",
+                    sed_conc_label: "step",
+                    sed_flux_label: "step"
+                }
+
+
+            # self.runoffdb.load_runs(date_from=date_from, date_to=date_to)
+
+
+            rdb.log_file_path = os.path.join(output_dir, "_log.txt")
 
             # open the output file for writing
-            output_csv = open(output_file, "w", encoding="utf-8")
-
+            try:
+                output_csv = open(output_file, "w", encoding="utf-8")
+            except PermissionError:
+                print(f"\033[91mspecified output file '{output_file}' is being used by another application\033[00m")
+                return
             # get the run properties column headers from the first run
-            values, headers = runs[0].get_info_array(lang=lang)
+            values, headers = list(runs.values())[0].get_info_array(lang=lang)
             # extend with export specific column headers
             headers.extend(column_headers[lang])
 
@@ -1802,57 +1840,82 @@ class Miner:
             more_fallows = 0
 
             updates = []
-            for run in runs:
-                # only for non-fallow runs ...
-                if run.crop_id != 1:
-                    print(f"\n#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}")
-                    # start the line with the general info
-                    line = run.get_info_array(no_data_value=no_data_value, lang=lang)[0]
 
-                    try:
-                        crop_hydrodata = run.get_best_hydro_data(request_map=request, labels_map=labels, interpolation_map=interpolations)
-                        if crop_hydrodata is None or crop_hydrodata[sed_yield_label].empty:
-                            continue
-                    except RecordSetNotComplete as e:
-                        print(f"\n\033[91mHydro-sediment record set of crop run #{run.id} is not complete\033[00m")
-                        print(f"\033[91mmissing record{'s' if len(e.missing_records) > 1 else ''}: {', '.join(e.missing_records)}\033[00m")
-                        continue
-                    else:
-                        print("crop hydrodata fetched")
-                        line.append(format_timedelta(the_time - run.ttr))
-                        line.append(run.get_rainfall_intensity_value() or no_data_value)
-                        line.append(get_value_in_time(crop_hydrodata,
-                                                      the_time,
-                                                      rain_tot_label,
-                                                      interpolate=interpolate,
-                                                      extrapolate=extrapolate))
-                        line.append(get_value_in_time(crop_hydrodata,
-                                                      the_time,
-                                                      runoff_label,
-                                                      interpolate=interpolate,
-                                                      extrapolate=extrapolate))
-                        line.append(get_value_in_time(crop_hydrodata,
-                                                      the_time,
-                                                      discharge_label,
-                                                      interpolate=interpolate,
-                                                      extrapolate=extrapolate))
-                        line.append(get_value_in_time(crop_hydrodata,
-                                                      pd.Timedelta(minutes=30),
-                                                      sed_conc_label,
-                                                      interpolate=interpolate,
-                                                      extrapolate=extrapolate))
-                        sedflux = get_value_in_time(crop_hydrodata,
-                                                      the_time,
-                                                      sed_flux_label,
-                                                      interpolate=interpolate,
-                                                      extrapolate=extrapolate)
-                        line.append(sedflux)
+            for seq_id, run_list in sequences.items():
+                print(f"\n### {seq_id} ###")
+                for run in run_list:
+                    print(f"\t{run.id} - {run.run_type.name[lang]}")
 
-                        sedyield = get_value_in_time(crop_hydrodata,
-                                                     the_time,
-                                                     sed_yield_label,
-                                                     interpolate=interpolate,
-                                                    extrapolate=extrapolate)
+            for seq_id, run_list in sequences.items():
+                print(f"\n### {seq_id} ###")
+
+                dry_crop_sedyield = 0
+                verywet_crop_sedyield = 0
+                dry_fallow_sedyield = 0
+                verywet_fallow_sedyield = 0
+
+                r = 0
+                for run in run_list:
+                    r += 1
+                    if run.crop_id != CULTIVATED_FALLOW_CROP_ID:
+                        print(f"\n#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}")
+                        # start the line with the general info
+                        line = run.get_info_array(no_data_value=no_data_value, lang=lang)[0]
+
+                        try:
+                            crop_hydrodata = run.get_best_hydro_data(request_map=request, labels_map=labels, interpolation_map=interpolations)
+                            # if crop_hydrodata is None or crop_hydrodata[sed_yield_label].empty:
+                            #     continue
+                        except RecordSetNotComplete as e:
+                            print(f"\n\033[91mHydro-sediment record set of crop run #{run.id} is not complete\033[00m")
+                            print(f"\033[91mmissing record{'s' if len(e.missing_records) > 1 else ''}: {', '.join(e.missing_records)}\033[00m")
+                            line.extend(6*no_data_value)
+                        else:
+                            print("crop hydrodata fetched")
+
+                            line.append(format_timedelta(the_time - run.ttr))
+                            line.append(run.get_rainfall_intensity_value(RAINFALL_INTENSITY_MMH_UNIT_ID) or no_data_value)
+                            line.append(get_value_in_time(crop_hydrodata,
+                                                          the_time,
+                                                          rain_tot_label,
+                                                          interpolate=interpolate,
+                                                          extrapolate=extrapolate))
+                            line.append(get_value_in_time(crop_hydrodata,
+                                                          the_time,
+                                                          runoff_label,
+                                                          interpolate=interpolate,
+                                                          extrapolate=extrapolate))
+                            line.append(get_value_in_time(crop_hydrodata,
+                                                          the_time,
+                                                          discharge_label,
+                                                          interpolate=interpolate,
+                                                          extrapolate=extrapolate))
+                            line.append(get_value_in_time(crop_hydrodata,
+                                                          the_time,
+                                                          sed_conc_label,
+                                                          interpolate=interpolate,
+                                                          extrapolate=extrapolate))
+                            print(f"crop_hydrodata.columns: {crop_hydrodata.columns}")
+                            sedflux = get_value_in_time(crop_hydrodata,
+                                                          the_time,
+                                                          sed_flux_label,
+                                                          interpolate=interpolate,
+                                                          extrapolate=extrapolate)
+                            line.append(sedflux)
+                            if crop_hydrodata is None or crop_hydrodata[sed_yield_label].empty:
+                                sedyield = 0
+                            else:
+                                sedyield = get_value_in_time(crop_hydrodata,
+                                                         the_time,
+                                                         sed_yield_label,
+                                                         interpolate=interpolate,
+                                                        extrapolate=extrapolate) or 0
+
+                                if run.run_type_id == DRY_RUN_TYPE_ID:
+                                    dry_crop_sedyield = sedyield
+                                else:
+                                    verywet_crop_sedyield = sedyield
+
                         line.append(sedyield)
 
                         # print(crop_hydrodata.columns.tolist())
@@ -1867,26 +1930,27 @@ class Miner:
                                        index=True,
                                        sep=local_seps["celld"][lang],
                                        decimal=local_seps["decd"][lang])
-                        print(f"rainfall total: {crop_hydrodata[rain_tot_label]}")
+                        # print(f"rainfall total: {crop_hydrodata[rain_tot_label]}")
 
-                    # try to get the reference run
-                    frun = run.get_reference_run()
-                    if frun is not None:
-                        print(f"\n\t\033[96m#{frun.id} - {czech_date(frun.datetime)} - {frun.locality.name} - {frun.crop.name[lang]} - {frun.plot_id} - {frun.run_type.name[lang]} - {frun.ttr}\033[00m")
+                        # try to get the reference run
+                        frun = run.get_reference_run()
+                        if frun is not None:
+                            print(f"\t\033[1;33m#{frun.id} - {czech_date(frun.datetime)} - {frun.locality.name} - {frun.crop.name[lang]} - [{frun.plot_id}] {frun.run_type.name[lang]} - {frun.ttr}\033[00m")
 
-                        line2 = frun.get_info_array(no_data_value=no_data_value, lang=lang)[0]
+                            line2 = frun.get_info_array(no_data_value=no_data_value, lang=lang)[0]
 
-                        try:
-                            fallow_hydrodata = frun.get_best_hydro_data(request_map=request, labels_map=labels, interpolation_map=interpolations)
-                        except RecordSetNotComplete as e:
-                            print(f"\n\n\033[91mHydro-sediment record set of fallow run #{frun.id} is not complete\033[00m")
-                            print(f"\033[91mmissing record{'s' if len(e.missing_records) > 1 else ''}: {', '.join(e.missing_records)}\033[00m")
-                            continue
-                        else:
-                            print("fallow hydrodata fetched")
+                            try:
+                                fallow_hydrodata = frun.get_best_hydro_data(request_map=request, labels_map=labels, interpolation_map=interpolations)
+                            except RecordSetNotComplete as e:
+                                print(f"\n\n\033[91mHydro-sediment record set of fallow run #{frun.id} is not complete\033[00m")
+                                print(f"\033[91mmissing record{'s' if len(e.missing_records) > 1 else ''}: {', '.join(e.missing_records)}\033[00m")
+                                # continue
+                            else:
+                                print("fallow hydrodata fetched")
+
                             line2.append(format_timedelta(the_time-frun.ttr))
 
-                            line2.append(frun.get_rainfall_intensity_value() or no_data_value)
+                            line2.append(frun.get_rainfall_intensity_value(RAINFALL_INTENSITY_MMH_UNIT_ID) or no_data_value)
                             line2.append(get_value_in_time(fallow_hydrodata,
                                                            the_time,
                                                            rain_tot_label,
@@ -1915,14 +1979,20 @@ class Miner:
                                                            extrapolate=extrapolate)
                             line2.append(sedflux)
 
-                            sedyield2 = get_value_in_time(fallow_hydrodata,
-                                                          the_time,
-                                                          sed_yield_label,
-                                                          interpolate=interpolate,
-                                                          extrapolate=extrapolate)
-                            line2.append(sedyield2)
+                            if fallow_hydrodata is None or fallow_hydrodata[sed_yield_label].empty:
+                                sedyield2 = 0
+                            else:
+                                sedyield2 = get_value_in_time(fallow_hydrodata,
+                                                             the_time,
+                                                             sed_yield_label,
+                                                             interpolate=interpolate,
+                                                             extrapolate=extrapolate) or 0
 
-                            line.append(sedyield/sedyield2)
+                                if frun.run_type_id == DRY_RUN_TYPE_ID:
+                                    dry_fallow_sedyield = sedyield2
+                                else:
+                                    verywet_fallow_sedyield = sedyield2
+                            line2.append(sedyield2)
 
                             points = {sed_flux_label: [(the_time, sedflux)]}
                             plots_filename = f"{frun.id}_{frun.datetime.strftime('%Y-%m-%d')}_{frun.locality.name}_{frun.crop.name[lang]}_{frun.run_type.name[lang]}"
@@ -1934,32 +2004,20 @@ class Miner:
                                                   index=True,
                                                   sep=local_seps["celld"][lang],
                                                   decimal=local_seps["decd"][lang])
-                    #
-                    # else:
-                    #     fallows = run.find_fellow_fallow()
-                    #     if len(fallows) == 0:
-                    #         print("\t\033[91mno fellow fallow found\033[00m")
-                    #         no_fallow += 1
-                    #         rdb.log(run.id, f"no fallow found")
-                    #
-                    #     elif len(fallows) == 1:
-                    #         frun = fallows[0]
-                    #         print(f"\t\033[92mmy fellow fallow is #{frun.id}\033[00m")
-                    #         rdb.log(run.id, f"single fallow #{fallows[0].id}")
-                    #         updates.append(f"update `run` set `reference_run_id` = {fallows[0].id} where `id` = {run.id}")
-                    #
-                    #         one_fallow += 1
-                    #     else:
-                    #         print(f"\t\033[93mseems like I have to choose between {', '.join([str(f.id) for f in fallows])}\033[00m")
-                    #         more_fallows += 1
-                    #         rdb.log(run.id, f"multiple matching fallows found: {', '.join([str(f.id) for f in fallows])}")
 
 
-                        writeRowToCSV(output_csv, line)
-                        writeRowToCSV(output_csv, line2)
-                else:
-                    # print(f"\n\033[96m==> #{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}\033[00m")
-                    pass
+                            line.append(sedyield/sedyield2)
+
+                            # at the last run in sequence save the 'combined SLR value'
+                            if r == len(run_list):
+                                line.append((dry_crop_sedyield + verywet_crop_sedyield) / (dry_fallow_sedyield + verywet_fallow_sedyield))
+
+                            writeRowToCSV(output_csv, line)
+                            writeRowToCSV(output_csv, line2)
+
+                    else:
+                        # print(f"\n\033[96m==> #{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]} - {run.ttr}\033[00m")
+                        pass
 
         output_csv.close()
 
@@ -2075,23 +2133,28 @@ class Miner:
                 else:
                     print(f"no sediment flux record found")
 
-
-    def show_plots_overview(self):
-        with RunoffDB as rdb:
-            print(f"")
-            for id, plot in rdb.plots.items():
-                print(f"\n{id} - {plot.name}")
-                print(f"\testablished {czech_date(plot.established)}")
-                print(f"\tprotection measures :") if plot.protection_measures else None
-
-                for measure in plot.protection_measures:
-                    print(f"\t\t{measure.id} - {measure.name['cz']}")
+    def plots_overview(self):
+        print(f"\n\nPLOTS OVERVIEW ============================")
+        self.runoffdb.show_plots()
         return
 
-    def show_methodics(self, lang="en"):
-        print("\n\n")
-        for meth in self.runoffdb.methodics.values():
-            meth.show_details(lang)
+    def simulators_overview(self, lang="en"):
+        print(f"\n\nSIMULATORS OVERVIEW ============================")
+        self.runoffdb.show_simulators(lang=lang)
+        return
+
+    def methodics_overview(self, lang="en"):
+        print(f"\n\nMETHODICS OVERVIEW ============================")
+        self.runoffdb.show_methodics(lang=lang)
+
+    def localities_overview(self):
+        print(f"\n\nLOCALITIES OVERVIEW ============================")
+        self.runoffdb.show_localities()
+
+    def agrotechnologies_overview(self):
+        print(f"\n\nAGROTECHNOLOGIES OVERVIEW ============================")
+        self.runoffdb.show_agrotechnologies()
+
     def export_methodics(self, output_path, lang="en"):
         export = self.runoffdb.export_methodics(lang)
 
