@@ -5,6 +5,7 @@
 import datetime
 
 from src.miner import Miner
+from src.entities import RunFilter
 from datetime import datetime
 import os
 
@@ -13,13 +14,16 @@ if __name__ == '__main__':
     start_time = datetime.now()
     # lang = "cz"
     lang = "en"
-    print()
 
-    with Miner() as miner:
-        # set the date limits for all miner actions
-        # miner.date_from = datetime.fromisoformat("2012-01-01")
-        miner.date_from = datetime.fromisoformat("2025-01-01")
-        miner.date_to = datetime.fromisoformat("2025-12-31")
+    filter = RunFilter(date_from=datetime.fromisoformat("2025-01-01"),
+                     date_to=datetime.fromisoformat("2025-12-31"),
+                     simulators=[7, 10],
+                     localities=None,
+                     crops=None,
+                     with_runoff_only=False)
+
+    with Miner(filter) as miner:
+
 
         # miner.simulators_overview(lang)
         # miner.plots_overview()
@@ -30,7 +34,6 @@ if __name__ == '__main__':
         #                                             log_file=f"d:/Downloads/discharge_calculation_comparison/_log_{datetime.now().strftime('%Y%m%d')}.txt")
 
         miner.calculate_SLR(output_dir=f"d:/Downloads/SLR_{datetime.now().strftime('%Y%m%d')}_step",
-                            simulators=[7, 10],
                             interpolate=False, lang="cz")
 
         # miner.find_fallow()
@@ -51,10 +54,10 @@ if __name__ == '__main__':
         #                                    lang=lang,
         #                                    no_data_value="")
 
-        # miner.generate_interval_values_csv(f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
-        #                                    lang=lang,
-        #                                    no_data_value="",
-        #                                    log_file=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_log.txt")
+        miner.generate_interval_values_csv(f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
+                                           lang=lang,
+                                           no_data_value="",
+                                           log_file=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_log.txt")
 
         # miner.generate_cumulative_values_csv("d:/Downloads/runoff_sediment_cumulative.csv",
 

@@ -8,6 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator, FuncFormatter
 
+from dataclasses import dataclass
+from typing import Iterable
+
 from src.db_access import DBconnector
 from src.exceptions import DataframeEmptyError, RecordSetNotComplete, DataframeNotTimeIndexed, RequestedTimeDeltaValueMissing
 
@@ -36,6 +39,48 @@ SEDIMENT_FLUX_GMIN_UNIT_ID = 23  # in g.min-1
 DRY_RUN_TYPE_ID = 1
 VERY_WET_RUN_TYPE_ID = 2
 WET_RUN_TYPE_ID = 3
+
+
+@dataclass(frozen=True)
+class RunFilter:
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    simulators: int | Iterable[int] | None = None
+    localities: int | Iterable[int] | None = None
+    crops: int | Iterable[int] | None = None
+    run_id: int | Iterable[int] | None = None
+    with_runoff_only: bool = False
+    limit: int | None = None
+
+    def matches(self, run) -> bool:
+        if self.run_id is not None:
+            if run.id not in as_list(self.run_id):
+                return False
+
+        if self.date_from is not None:
+            if run.datetime < datetime.combine(self.date_from, time.min):
+                return False
+
+        if self.date_to is not None:
+            if run.datetime > datetime.combine(self.date_to, time.max):
+                return False
+
+        if self.simulators is not None:
+            if run.simulator_id not in as_list(self.simulators):
+                return False
+
+        if self.localities is not None:
+            if run.locality_id not in as_list(self.localities):
+                return False
+
+        if self.crops is not None:
+            if run.crop_id not in as_list(self.crops):
+                return False
+
+        if self.with_runoff_only and run.ttr is None:
+            return False
+
+        return True
 
 class RunoffDB:
     agrotechnologies_table = "`agrotechnology`"
@@ -117,22 +162,13 @@ class RunoffDB:
         self.quality_index = self.load_quality_index()
         self.assignment_types = self.load_assignment_types()
 
-        # do not load the runs as they might be limited by filters
-        self.runs = {}
-        # sequences to runs mapping
-        self.sequences = {}
+        self._run_cache: dict[int, Run] = {}
+
         self.log_file_path = log_file_path
         self.run_log = {}
         print("\n... everything is ready.")
         print(80*"="+"\n")
 
-        # if filters were applied on load
-        self.filter_date_from = None
-        self.filter_date_to = None
-        self.filter_simulators = None
-        self.filter_localities = None
-        self.filter_crops = None
-        self.filter_with_runoff_only = None
 
     def __enter__(self):
         return self
@@ -186,175 +222,260 @@ class RunoffDB:
     def clear_log(self):
         self.run_log = {}
 
-    def load_runs(self, date_from=None, date_to=None, simulators=None, localities=None, crops=None, run_id=None, with_runoff_only=False, limit=None):
-        """
-        Loads Run objects from database filtered to match given limitations. Loads all simulation runs if no filtres provided.
-        Fills the self.runs dictionary with runs indexed by their ID
-        :param date_from: load runs older than ('YYYY-MM-DD' format)
-        :param date_to: load runs younger than ('YYYY-MM-DD' format)
-        :param simulators: load runs performed with given simulator/s (list of simulator IDs)
-        :param localities: load runs performed on given locality/localities (list of locality IDs)
-        :param crops: load runs performed on a plot with given crop/s (list of crop IDs)
-        :param with_runoff_only: load runs where runoff initiated only
-        :param limit: number of runs to load
-        :param run_id:
-        :return:
-        """
-        # convert everything to lists if not already
 
-        if simulators is not None and not isinstance(simulators, list):
-            simulators = [simulators]
-        if localities is not None and not isinstance(localities, list):
-            localities = [localities]
-        if crops is not None and not isinstance(crops, list):
-            crops = [crops]
+    # def load_runs(self, date_from=None, date_to=None, simulators=None, localities=None, crops=None, run_id=None, with_runoff_only=False, limit=None):
+    #     """
+    #     Loads Run objects from database filtered to match given limitations. Loads all simulation runs if no filtres provided.
+    #     Fills the self.runs dictionary with runs indexed by their ID
+    #     :param date_from: load runs older than ('YYYY-MM-DD' format)
+    #     :param date_to: load runs younger than ('YYYY-MM-DD' format)
+    #     :param simulators: load runs performed with given simulator/s (list of simulator IDs)
+    #     :param localities: load runs performed on given locality/localities (list of locality IDs)
+    #     :param crops: load runs performed on a plot with given crop/s (list of crop IDs)
+    #     :param with_runoff_only: load runs where runoff initiated only
+    #     :param limit: number of runs to load
+    #     :param run_id:
+    #     :return:
+    #     """
+    #     # convert everything to lists if not already
+    #
+    #     if simulators is not None and not isinstance(simulators, list):
+    #         simulators = [simulators]
+    #     if localities is not None and not isinstance(localities, list):
+    #         localities = [localities]
+    #     if crops is not None and not isinstance(crops, list):
+    #         crops = [crops]
+    #
+    #     with self.get_connection() as dbcon:
+    #         with dbcon.cursor(dictionary=True) as thecursor:
+    #             # start of the query
+    #             query = f"SELECT {self.runs_table}.`id` AS run_id, " \
+    #                     f"{self.runs_table}.`runoff_start` AS ttr, " \
+    #                     f"{self.runs_table}.`init_moisture_id` AS initmoist_recid, " \
+    #                     f"{self.runs_table}.`surface_cover_id` AS surface_cover_recid, " \
+    #                     f"{self.runs_table}.`rain_intensity_id` AS rainfall_recid, " \
+    #                     f"{self.runs_table}.`soil_sample_bulk_id` AS bulkd_ss_id, " \
+    #                     f"{self.runs_table}.`bulk_assignment_type_id` AS bulkd_ss_asstype, " \
+    #                     f"{self.runs_table}.`soil_sample_texture_id` AS texture_ss_id, " \
+    #                     f"{self.runs_table}.`texture_assignment_type_id` AS texture_ss_asstype, " \
+    #                     f"{self.runs_table}.`soil_sample_corg_id` AS corg_ss_id, " \
+    #                     f"{self.runs_table}.`corg_assignment_type_id` AS corg_ss_asstype, " \
+    #                     f"{self.runs_table}.`crop_bbch` AS bbch, " \
+    #                     f"{self.runs_table}.`note_cz`, " \
+    #                     f"{self.runs_table}.`note_en`, " \
+    #                     f"{self.runs_table}.`crop_condition_cz`, " \
+    #                     f"{self.runs_table}.`crop_condition_en`, " \
+    #                     f"{self.runs_table}.`reference_run_id`, " \
+    #                     f"{self.run_groups_table}.`sequence_id` AS sequence_id, " \
+    #                     f"{self.run_groups_table}.`datetime` AS datetime, " \
+    #                     f"{self.sequences_table}.`simulator_id` AS simulator_id, " \
+    #                     f"{self.runs_table}.`run_group_id` AS run_group_id, " \
+    #                     f"{self.run_groups_table}.`run_type_id` AS run_type_id, " \
+    #                     f"{self.plots_table}.`locality_id` AS locality_id, " \
+    #                     f"{self.plots_table}.`id` AS plot_id, " \
+    #                     f"{self.plots_table}.`crop_id` AS crop_id, " \
+    #                     f"{self.crops_table}.`crop_type_id` AS crop_type_id " \
+    #                     f"FROM {self.runs_table} " \
+    #                     f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
+    #                     f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
+    #                     f"JOIN {self.plots_table} ON {self.runs_table}.`plot_id` = {self.plots_table}.`id` " \
+    #                     f"JOIN {self.crops_table} ON {self.plots_table}.`crop_id` = {self.crops_table}.`id` " \
+    #                     f"WHERE (`deleted` = 0 OR `deleted` IS NULL) "
+    #             if with_runoff_only:
+    #                 query += " AND`runoff_start` IS NOT NULL "
+    #             if run_id is not None:
+    #                 if isinstance(run_id, list):
+    #                     query += f" AND {self.runs_table}.`id` IN ({', '.join(run_id)})"
+    #                 else:
+    #                     query += f" AND {self.runs_table}.`id` = {run_id}"
+    #             else:
+    #                 if date_from is not None:
+    #                     query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
+    #                 if date_to is not None:
+    #                     query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
+    #                 if simulators is not None:
+    #                     query += f" AND {self.sequences_table}.`simulator_id` IN ({', '.join([str(s) for s in simulators])})"
+    #                 if localities is not None:
+    #                     query += f" AND {self.plots_table}.`locality_id` IN ({', '.join([str(s) for s in localities])})"
+    #                 if crops is not None:
+    #                     query += f" AND {self.runs_table}.`crop_id` IN ({', '.join([str(s) for s in crops])})"
+    #                 # additional conditions
+    #                 # query += f"AND `` = "
+    #
+    #                 # end of the query
+    #                 query += " ORDER BY `datetime` ASC"
+    #
+    #                 if limit:
+    #                     query += f" LIMIT {limit}"
+    #             # print(query)
+    #             # execute the query and fetch the results
+    #             thecursor.execute(query)
+    #
+    #             results = thecursor.fetchall()
+    #
+    #             run_dict = {}
+    #             if thecursor.rowcount > 0:
+    #                 for r in results:
+    #                     new = Run(self, **r)
+    #                     # new_run.show_details()
+    #                     run_dict.update({new.id: new})
+    #
+    #                 thecursor.close()
+    #                 self.runs.update(run_dict)
+    #
+    #                 # fill the sequences property
+    #                 self.order_runs_by_sequence(list(run_dict.values()))
+    #
+    #                 # store filters
+    #                 self.filter_date_from = date_from
+    #                 self.filter_date_to = date_to
+    #                 self.filter_simulators = simulators
+    #                 self.filter_localities = localities
+    #                 self.filter_crops = crops
+    #                 self.filter_with_runoff_only = with_runoff_only
+    #
+    #                 return run_dict
+    #         return None
+
+    def load_runs(self, query: RunFilter) -> dict[int, 'Run']:
+
+        simulators = as_list(query.simulators)
+        localities = as_list(query.localities)
+        crops = as_list(query.crops)
+        run_id = as_list(query.run_id)
 
         with self.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-                # start of the query
-                query = f"SELECT {self.runs_table}.`id` AS run_id, " \
-                        f"{self.runs_table}.`runoff_start` AS ttr, " \
-                        f"{self.runs_table}.`init_moisture_id` AS initmoist_recid, " \
-                        f"{self.runs_table}.`surface_cover_id` AS surface_cover_recid, " \
-                        f"{self.runs_table}.`rain_intensity_id` AS rainfall_recid, " \
-                        f"{self.runs_table}.`soil_sample_bulk_id` AS bulkd_ss_id, " \
-                        f"{self.runs_table}.`bulk_assignment_type_id` AS bulkd_ss_asstype, " \
-                        f"{self.runs_table}.`soil_sample_texture_id` AS texture_ss_id, " \
-                        f"{self.runs_table}.`texture_assignment_type_id` AS texture_ss_asstype, " \
-                        f"{self.runs_table}.`soil_sample_corg_id` AS corg_ss_id, " \
-                        f"{self.runs_table}.`corg_assignment_type_id` AS corg_ss_asstype, " \
-                        f"{self.runs_table}.`crop_bbch` AS bbch, " \
-                        f"{self.runs_table}.`note_cz`, " \
-                        f"{self.runs_table}.`note_en`, " \
-                        f"{self.runs_table}.`crop_condition_cz`, " \
-                        f"{self.runs_table}.`crop_condition_en`, " \
-                        f"{self.runs_table}.`reference_run_id`, " \
-                        f"{self.run_groups_table}.`sequence_id` AS sequence_id, " \
-                        f"{self.run_groups_table}.`datetime` AS datetime, " \
-                        f"{self.sequences_table}.`simulator_id` AS simulator_id, " \
-                        f"{self.runs_table}.`run_group_id` AS run_group_id, " \
-                        f"{self.run_groups_table}.`run_type_id` AS run_type_id, " \
-                        f"{self.plots_table}.`locality_id` AS locality_id, " \
-                        f"{self.plots_table}.`id` AS plot_id, " \
-                        f"{self.plots_table}.`crop_id` AS crop_id, " \
-                        f"{self.crops_table}.`crop_type_id` AS crop_type_id " \
-                        f"FROM {self.runs_table} " \
-                        f"JOIN {self.run_groups_table} ON {self.runs_table}.`run_group_id` = {self.run_groups_table}.`id` " \
-                        f"JOIN {self.sequences_table} ON {self.run_groups_table}.`sequence_id` = {self.sequences_table}.`id` " \
-                        f"JOIN {self.plots_table} ON {self.runs_table}.`plot_id` = {self.plots_table}.`id` " \
-                        f"JOIN {self.crops_table} ON {self.plots_table}.`crop_id` = {self.crops_table}.`id` " \
-                        f"WHERE (`deleted` = 0 OR `deleted` IS NULL) "
-                if with_runoff_only:
-                    query += " AND`runoff_start` IS NOT NULL "
-                if run_id is not None:
-                    if isinstance(run_id, list):
-                        query += f" AND {self.runs_table}.`id` IN ({', '.join(run_id)})"
-                    else:
-                        query += f" AND {self.runs_table}.`id` = {run_id}"
+            with dbcon.cursor(dictionary=True) as cur:
+
+                sql = f"""
+                    SELECT
+                        r.`id` AS run_id,
+                        r.`runoff_start` AS ttr,
+                        r.`init_moisture_id` AS initmoist_recid,
+                        r.`surface_cover_id` AS surface_cover_recid,
+                        r.`rain_intensity_id` AS rainfall_recid,
+                        r.`soil_sample_bulk_id` AS bulkd_ss_id,
+                        r.`bulk_assignment_type_id` AS bulkd_ss_asstype,
+                        r.`soil_sample_texture_id` AS texture_ss_id,
+                        r.`texture_assignment_type_id` AS texture_ss_asstype,
+                        r.`soil_sample_corg_id` AS corg_ss_id,
+                        r.`corg_assignment_type_id` AS corg_ss_asstype,
+                        r.`crop_bbch` AS bbch,
+                        r.`note_cz`,
+                        r.`note_en`,
+                        r.`crop_condition_cz`,
+                        r.`crop_condition_en`,
+                        r.`reference_run_id`,
+                        r.`run_group_id` AS run_group_id,
+                        rg.`sequence_id`,
+                        rg.`datetime`,
+                        rg.`run_type_id`,
+                        s.`simulator_id`,
+                        p.`locality_id`,
+                        p.`id` AS plot_id,
+                        p.`crop_id`,
+                        c.`crop_type_id`
+                    FROM {self.runs_table} r
+                    JOIN {self.run_groups_table} rg ON r.`run_group_id` = rg.`id`
+                    JOIN {self.sequences_table} s ON rg.`sequence_id` = s.`id`
+                    JOIN {self.plots_table} p ON r.`plot_id` = p.`id`
+                    JOIN {self.crops_table} c ON p.`crop_id` = c.`id`
+                    WHERE (s.`deleted` = 0 OR s.`deleted` IS NULL)
+                """
+
+                if query.with_runoff_only:
+                    sql += " AND r.`runoff_start` IS NOT NULL"
+
+                if run_id:
+                    sql += f" AND r.`id` IN ({', '.join(map(str, run_id))})"
                 else:
-                    if date_from is not None:
-                        query += f" AND {self.run_groups_table}.`datetime` >= '{date_from}'"
-                    if date_to is not None:
-                        query += f" AND {self.run_groups_table}.`datetime` <= '{date_to}'"
-                    if simulators is not None:
-                        query += f" AND {self.sequences_table}.`simulator_id` IN ({', '.join([str(s) for s in simulators])})"
-                    if localities is not None:
-                        query += f" AND {self.plots_table}.`locality_id` IN ({', '.join([str(s) for s in localities])})"
-                    if crops is not None:
-                        query += f" AND {self.runs_table}.`crop_id` IN ({', '.join([str(s) for s in crops])})"
-                    # additional conditions
-                    # query += f"AND `` = "
+                    if query.date_from:
+                        sql += f" AND rg.`datetime` >= '{query.date_from}'"
+                    if query.date_to:
+                        sql += f" AND rg.`datetime` <= '{query.date_to}'"
+                    if simulators:
+                        sql += f" AND s.`simulator_id` IN ({', '.join(map(str, simulators))})"
+                    if localities:
+                        sql += f" AND p.`locality_id` IN ({', '.join(map(str, localities))})"
+                    if crops:
+                        sql += f" AND p.`crop_id` IN ({', '.join(map(str, crops))})"
 
-                    # end of the query
-                    query += " ORDER BY `datetime` ASC"
+                sql += " ORDER BY rg.`datetime` ASC"
 
-                    if limit:
-                        query += f" LIMIT {limit}"
-                # print(query)
-                # execute the query and fetch the results
-                thecursor.execute(query)
+                if query.limit:
+                    sql += f" LIMIT {query.limit}"
 
-                results = thecursor.fetchall()
+                cur.execute(sql)
+                rows = cur.fetchall()
 
-                run_dict = {}
-                if thecursor.rowcount > 0:
-                    for r in results:
-                        new = Run(self, **r)
-                        # new_run.show_details()
-                        run_dict.update({new.id: new})
+        runs: dict[int, Run] = {}
+        for row in rows:
+            rid = row["run_id"]
+            if rid in self._run_cache:
+                run = self._run_cache[rid]
+            else:
+                run = Run(self, **row)
+                self._run_cache[rid] = run
 
-                    thecursor.close()
-                    self.runs.update(run_dict)
+            runs[rid] = run
 
-                    # fill the sequences property
-                    self.order_runs_by_sequence(list(run_dict.values()))
+        return runs
+    #
+    # def get_runs(self, date_from=None, date_to=None, run_types=None, simulators=None, localities=None, crops=None, plots=None):
+    #     """
+    #     Returns filtered list of runs from self.runs dictionary
+    #
+    #     :param date_from:
+    #     :param date_to:
+    #     :param run_types:
+    #     :param simulators:
+    #     :param localities:
+    #     :param crops:
+    #     :param plots:
+    #     :return:
+    #     """
+    #
+    #     # convert everything to lists if not already
+    #     if run_types is not None and not isinstance(run_types, list):
+    #         run_types = [run_types]
+    #     if simulators is not None and not isinstance(simulators, list):
+    #         simulators = [simulators]
+    #     if localities is not None and not isinstance(localities, list):
+    #         localities = [localities]
+    #     if crops is not None and not isinstance(crops, list):
+    #         crops = [crops]
+    #     if plots is not None and not isinstance(plots, list):
+    #         plots = [plots]
+    #
+    #     result = list(self.runs.values())
+    #
+    #     # filter by datetime range
+    #     if date_from is not None:
+    #         result = [r for r in result if r.datetime >= datetime.combine(date_from, time(0, 0, 0))]
+    #     if date_to is not None:
+    #         result = [r for r in result if r.datetime <= datetime.combine(date_to, time(23, 59, 59))]
+    #
+    #         print(f"simulators in get_runs: {simulators}")
+    #
+    #     # filter by categorical ids
+    #     if run_types is not None:
+    #         result = [r for r in result if r.run_type_id in run_types]
+    #     if simulators is not None:
+    #         result = [r for r in result if r.simulator_id in simulators]
+    #     if localities is not None:
+    #         result = [r for r in result if r.locality_id in localities]
+    #     if crops is not None:
+    #         result = [r for r in result if r.crop_id in crops]
+    #     if plots is not None:
+    #         result = [r for r in result if r.plot_id in plots]
+    #
+    #     return result
 
-                    # store filters
-                    self.filter_date_from = date_from
-                    self.filter_date_to = date_to
-                    self.filter_simulators = simulators
-                    self.filter_localities = localities
-                    self.filter_crops = crops
-                    self.filter_with_runoff_only = with_runoff_only
-
-                    return run_dict
-            return None
-
-    def get_runs(self, date_from=None, date_to=None, run_types=None, simulators=None, localities=None, crops=None, plots=None):
-        """
-        Returns filtered list of runs from self.runs dictionary
-
-        :param date_from:
-        :param date_to:
-        :param run_types:
-        :param simulators:
-        :param localities:
-        :param crops:
-        :param plots:
-        :return:
-        """
-
-        # convert everything to lists if not already
-        if run_types is not None and not isinstance(run_types, list):
-            run_types = [run_types]
-        if simulators is not None and not isinstance(simulators, list):
-            simulators = [simulators]
-        if localities is not None and not isinstance(localities, list):
-            localities = [localities]
-        if crops is not None and not isinstance(crops, list):
-            crops = [crops]
-        if plots is not None and not isinstance(plots, list):
-            plots = [plots]
-
-        result = list(self.runs.values())
-
-        # filter by datetime range
-        if date_from is not None:
-            result = [r for r in result if r.datetime >= datetime.combine(date_from, time(0, 0, 0))]
-        if date_to is not None:
-            result = [r for r in result if r.datetime <= datetime.combine(date_to, time(23, 59, 59))]
-
-            print(f"simulators in get_runs: {simulators}")
-
-        # filter by categorical ids
-        if run_types is not None:
-            result = [r for r in result if r.run_type_id in run_types]
-        if simulators is not None:
-            result = [r for r in result if r.simulator_id in simulators]
-        if localities is not None:
-            result = [r for r in result if r.locality_id in localities]
-        if crops is not None:
-            result = [r for r in result if r.crop_id in crops]
-        if plots is not None:
-            result = [r for r in result if r.plot_id in plots]
-
-        return result
-
-    def get_run_by_id(self, run_id):
-        if run_id in self.runs.keys():
-            return self.runs[run_id]
-        else:
-            return self.load_runs(run_id=run_id)
+    # def get_run_by_id(self, run_id):
+    #     if run_id in self.runs.keys():
+    #         return self.runs[run_id]
+    #     else:
+    #         return self.load_runs(RunFilter({run_id: run_id}))
 
     def load_plots(self, id=None):
         with self.get_connection() as dbcon:
@@ -868,7 +989,7 @@ class Run:
         self.run_type = self.runoffdb.run_types[self.run_type_id]
         self.ttr = kwargs["ttr"]
         self.measurements = None
-        self.brothers = self.load_group_brothers()
+        self.brothers = self.get_group_brothers_ids()
         self.plot_id = kwargs["plot_id"]
         self.plot = runoffdb.plots[self.plot_id]
         self.locality_id = kwargs["locality_id"]
@@ -939,7 +1060,7 @@ class Run:
             print(f"\tno records at all")
         return
 
-    def load_group_brothers(self):
+    def get_group_brothers_ids(self):
         """
         Returns a list of IDs of simulation runs from the same group
         :return:
@@ -1356,10 +1477,10 @@ class Run:
         requested_keys = [k for k, v in requested.items() if v]
         present_records, missing_records, derived_sources, skipped_derived = self._resolve_present_records(requested_keys, dependencies, default_units)
 
-        print(f"present records: {present_records}")
-        print(f"missing records: {missing_records}")
-        print(f"derived sources: {derived_sources}")
-        print(f"derived skipped: {skipped_derived}")
+        # print(f"present records: {present_records}")
+        # print(f"missing records: {missing_records}")
+        # print(f"derived sources: {derived_sources}")
+        # print(f"derived skipped: {skipped_derived}")
         if missing_records:
             raise RecordSetNotComplete(requested_keys, missing_records)
 
@@ -1706,7 +1827,13 @@ class Run:
         if self.reference_run_id is None:
             return None
         else:
-            return self.runoffdb.get_run_by_id(self.reference_run_id)
+            # this should never happen
+            ref_runs = self.runoffdb.load_runs(RunFilter(run_id=self.reference_run_id))
+            if len(ref_runs) > 1:
+                print(f"\n\033[91mRun #{self.id} got more than one reference run returned\033[00m")
+            # get the run instance from the dict
+            ref_run = list(ref_runs.values())[0]
+            return ref_run
 
     def get_records(self, unit_id=None,
                     phenomenon_id=None,
@@ -2703,7 +2830,7 @@ class Plot:
                 if m.name[lang] is not None:
                     outlist.append(m.name[lang])
                 else:
-                    outlist.append(f"*missing name in '{lang}'*")
+                    outlist.append(f"*protection measure ID {m.id} is missing name in '{lang}'*")
             return ", ".join([msr for msr in outlist])
         return None
 
@@ -3387,6 +3514,12 @@ class Instrument:
         export["description"] = self.description[lang] if self.description[lang] else "NA"
 
         return export
+
+def as_list(v):
+    if v is None:
+        return None
+    return v if isinstance(v, (list, tuple, set)) else [v]
+
 def remove_last_zero_row(df):
     """
     Removes last row of a dataframe if value is equal to 0
