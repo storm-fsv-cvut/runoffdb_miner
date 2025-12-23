@@ -12,7 +12,7 @@ class DBconnector:
         # server to connect to
         self.server = "localhost"
         # database name to use
-        self.db_name = "runoffdb"
+        self.db_name = "runoffdbfsv_db"
         # username for the db access
         self.username = "root"
         # password of the user
