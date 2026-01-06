@@ -1,9 +1,26 @@
 import json
 import os
+import locale
 
 from .filesystem import sanitize_path
 from ..exceptions import DataframeEmptyError
 
+def write_row_to_csv(fileref, towrite, lined="\n", celld=";"):
+    linestring = ""
+    i = 0
+    for item in towrite:
+        if isinstance(item, float):
+            linestring += locale.format_string('%.3f', item)
+        else:
+            linestring += f"{item}"
+
+        if i < len(towrite)-1:
+            linestring += celld
+        else:
+            linestring += lined
+        i += 1
+    fileref.write(linestring)
+    return
 def write_run_metadata_json(run, run_dir, lang):
     with open(os.path.join(run_dir, f"{run.id}.json"), "w") as f:
         json.dump(run.get_metadata(lang), f, ensure_ascii=False, indent=4)

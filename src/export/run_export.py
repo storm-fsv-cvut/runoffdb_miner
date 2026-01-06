@@ -62,11 +62,11 @@ def write_hydro_sediment_data_to_csv(run, output_path, lang, no_data_value, labl
         plot_hydro_data(hydro_data, os.path.join(os.path.dirname(output_path), "runoff.png"), [rain_int_label, rain_tot_label, runoff_label])
 
         local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
-        hydro_data.to_csv(output_path),
-                       index=index,
-                       sep=local_seps["celld"][lang],
-                       decimal=local_seps["decd"][lang],
-                       header=column_headers)
+        # hydro_data.to_csv(output_path),
+        #                index=index,
+        #                sep=local_seps["celld"][lang],
+        #                decimal=local_seps["decd"][lang],
+        #                header=column_headers)
 
     # miner.runoffdb.save_log(run_log_path)
 

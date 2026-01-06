@@ -7,6 +7,7 @@ from src.miner import Miner
 from src.logging.logger import RunLogger
 from src.run_filter import RunFilter
 from src.export.structured_dump import generate_structured_dump
+from src.export.interval_export import generate_interval_values_csv
 from datetime import datetime
 
 
@@ -15,16 +16,16 @@ if __name__ == '__main__':
     # lang = "cz"
     lang = "en"
 
-    filter = RunFilter(date_from=datetime.fromisoformat("2025-01-01"),
-                     date_to=datetime.fromisoformat("2025-12-31"),
-                     simulators=[7, 10],
+    filter = RunFilter(date_from=datetime.fromisoformat("2021-05-26"),
+                     date_to=datetime.fromisoformat("2021-07-15"),
+                     simulators=None,  # [7, 10],
                      localities=None,
                      crops=None,
                      with_runoff_only=False)
 
     with Miner(filter) as miner:
 
-
+        generate_interval_values_csv(miner, f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv", lang=lang, no_data_value="")
         # miner.simulators_overview(lang)
         # miner.plots_overview()
         # miner.methodics_overview(lang)
@@ -61,8 +62,8 @@ if __name__ == '__main__':
 
         # miner.generate_cumulative_values_csv("d:/Downloads/runoff_sediment_cumulative.csv",
 
-        generate_structured_dump(miner, f"D:/downloads/runoffdb_dump_{datetime.now().strftime('%Y%m%d')}_{lang}",
-                                          lang=lang)
+        # generate_structured_dump(miner, f"D:/downloads/runoffdb_dump_{datetime.now().strftime('%Y%m%d')}_{lang}",
+        #                                   lang=lang)
 
         # miner.generate_structured_dump(f"D:/downloads/runoffdb_dump_{datetime.now().strftime('%Y%m%d')}_{lang}",
         #                                   date_from="2019-06-03",

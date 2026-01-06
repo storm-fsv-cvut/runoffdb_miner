@@ -124,7 +124,7 @@ class Run:
             if len(initmoist_data.index) == 1:
                 return initmoist_data["initial_moisture"].mean()
             else:
-                self.runoffdb.log(self.id, f"dedicated initial moisture record {initmoist_rec.id} contains more than one value")
+                # self.runoffdb.log(self.id, f"dedicated initial moisture record {initmoist_rec.id} contains more than one value")
                 if multi_value:
                     return initmoist_data["initial_moisture"].toList()
                 else:
@@ -132,7 +132,7 @@ class Run:
                     print(f"Mean value of all {len(initmoist_data.index)} data points was returned.")
                     return initmoist_data["initial_moisture"].mean()
         else:
-            self.runoffdb.log(self.id, "initial moisture dedicated record not assigned")
+            # self.runoffdb.log(self.id, "initial moisture dedicated record not assigned")
             print(f"\trun #{self.id} doesn't have dedicated initial moisture record ID assigned.")
             return None
 
@@ -149,7 +149,7 @@ class Run:
         surface_cover_rec = None
 
         if not self.surface_cover_recid:
-            self.runoffdb.log(self.id,f"surface cover dedicated record not assigned")
+            # self.runoffdb.log(self.id,f"surface cover dedicated record not assigned")
             print(f"\trun #{self.id} doesn't have dedicated surface cover record assigned")
             surface_cover_rec = self.get_best_record_of_unit(unit_id=10)
 
@@ -174,55 +174,55 @@ class Run:
         else:
             # check crop type for "without cover" if no surface cover assigned to run
             if self.crop.crop_type_id == 10:
-                self.runoffdb.log(self.id, f"no record of surface cover found - value derived from crop type")
+                # self.runoffdb.log(self.id, f"no record of surface cover found - value derived from crop type")
                 print(f"\trun #{self.id} has no surface cover record - value derived from crop type")
                 return 0
             else:
-                self.runoffdb.log(self.id, f"no record of surface cover found")
+                # self.runoffdb.log(self.id, f"no record of surface cover found")
                 print(f"\trun #{self.id} has no surface cover record")
                 return None
 
 
     def get_crop_height_value(self):
-        crop_height_rec = self.get_best_record_of_unit(31)
+        crop_height_rec = self.get_best_record_of_unit(CROP_HEIGHT_CM_UNIT_ID)
         if crop_height_rec is not None:
             try:
                 crop_height_data = crop_height_rec.get_data("crop_height")
             except DataframeEmptyError:
-                self.runoffdb.log(self.id, f"crop heigh record #{crop_height_rec.id} returned empty dataframe")
+                # self.runoffdb.log(self.id, f"crop heigh record #{crop_height_rec.id} returned empty dataframe")
                 print(f"\tcrop heigh dataframe of record {crop_height_rec.id} is empty")
                 return None
             else:
                 if crop_height_data is not None:
                     return crop_height_data["crop_height"].mean()
                 else:
-                    self.runoffdb.log(self.id, f"plant density data of record {crop_height_rec.id} is None")
+                    # self.runoffdb.log(self.id, f"plant density data of record {crop_height_rec.id} is None")
                     print(f"\tplant density data of record {crop_height_rec.id} is None")
                     return None
         else:
-            self.runoffdb.log(self.id, f"no crop height record found")
+            # self.runoffdb.log(self.id, f"no crop height record found")
             print(f"\trun #{self.id} has no crop height record")
             return None
 
 
     def get_plant_density_value(self):
-        plant_density_rec = self.get_best_record_of_unit(30)
+        plant_density_rec = self.get_best_record_of_unit(CROP_DENSITY_M_2_UNIT_ID)
         if plant_density_rec is not None:
             try:
                 plant_density_data = plant_density_rec.get_data("plant_density")
             except DataframeEmptyError:
-                self.runoffdb.log(self.id, f"plant density record #{plant_density_rec.id} returned empty dataframe")
+                # self.runoffdb.log(self.id, f"plant density record #{plant_density_rec.id} returned empty dataframe")
                 print(f"\tplant density dataframe of record {plant_density_rec.id} is empty")
                 return None
             else:
                 if plant_density_data is not None:
                     return plant_density_data["plant_density"].mean()
                 else:
-                    self.runoffdb.log(self.id, f"plant density data of record {plant_density_rec.id} is None")
+                    # self.runoffdb.log(self.id, f"plant density data of record {plant_density_rec.id} is None")
                     print(f"\tplant density data of record {plant_density_rec.id} is None")
                     return None
         else:
-            self.runoffdb.log(self.id, f"no plant density record found")
+            # self.runoffdb.log(self.id, f"no plant density record found")
             print(f"\trun #{self.id} has no plant density record")
         return
 
@@ -236,18 +236,18 @@ class Run:
             else:
                 # constant intensity series has exactly 2 rows, any other number is some exception or non-standard rainfall
                 if len(intensity_data.index) == 1:
-                    self.runoffdb.log(self.id, f"rainfall intensity series of record {intensity_rec.id} contains only one data point")
+                    # self.runoffdb.log(self.id, f"rainfall intensity series of record {intensity_rec.id} contains only one data point")
                     print(f"Rainfall intensity record {intensity_rec.id} of run {self.id} contains only one data point. Proper rainfall intensity must have at least two data points.")
                     return None
                 elif len(intensity_data.index) == 2:
                     if intensity_data["rain_intensity"].iloc[-1] != 0:
-                        self.runoffdb.log(self.id, f"rainfall intensity timeline record {intensity_rec} not ending with 0")
+                        # self.runoffdb.log(self.id, f"rainfall intensity timeline record {intensity_rec} not ending with 0")
                         print(f"Rainfall intensity record {self.rain_intensity_recid} of run {self.id} doesn't end with zero value!")
                         return None
                     else:
                         return intensity_data
         else:
-            self.runoffdb.log(self.id, f"dedicated rainfall intensity record not assigned")
+            # self.runoffdb.log(self.id, f"dedicated rainfall intensity record not assigned")
             print(f"\trun #{self.id} doesn't have dedicated rainfall intensity record ID assigned")
             return None
 
@@ -371,11 +371,11 @@ class Run:
                           f"Check your data consistency in the database.")
                     return None
             else:
-                self.runoffdb.log(self.id, f"\tdedicated texture soil sample #{self.texture_ss.id} doesn't have dedicated texture record assigned.")
+                # self.runoffdb.log(self.id, f"\tdedicated texture soil sample #{self.texture_ss.id} doesn't have dedicated texture record assigned.")
                 print(f"\tdedicated texture soil sample of run #{self.id} doesn't have dedicated texture record assigned.")
                 return None
         else:
-            self.runoffdb.log(self.id, f"dedicated texture soil sample not assigned")
+            # self.runoffdb.log(self.id, f"dedicated texture soil sample not assigned")
             print(f"\trun #{self.id} doesn't have dedicated texture soil sample assigned")
 
         # try getting any record with texture
@@ -422,12 +422,12 @@ class Run:
                           f"Check your data consistency in the database.")
                     return None
             else:
-                self.runoffdb.log(self.id, f"\tdedicated bulk density soil sample #{self.bulkd_ss.id} doesn't have dedicated bulk density record assigned.")
+                # self.runoffdb.log(self.id, f"\tdedicated bulk density soil sample #{self.bulkd_ss.id} doesn't have dedicated bulk density record assigned.")
 
                 print(f"\tdedicated bulk density soil sample of run #{self.id} doesn't have dedicated bulk density record assigned.")
                 return None
         else:
-            self.runoffdb.log(self.id, f"dedicated bulk density soil sample not assigned")
+            # self.runoffdb.log(self.id, f"dedicated bulk density soil sample not assigned")
             print(f"\trun #{self.id} doesn't have dedicated bulk density soil sample assigned")
 
         # try getting any record with bulk density
@@ -445,419 +445,6 @@ class Run:
                 if bulk_data is not None:
                     return bulk_data["bulk_density"].mean()
         return None
-
-    def get_best_hydro_data(self, labels_map=None, request_map=None, interpolation_map=None):
-        """
-        Combines hydrological data records of a run into one TimeDelta indexed dataframe with cross-interpolated time points.
-        :param labels_map: Dictionary of labels that should be assigned to records in the output dataframe
-        :param request_map: Dictionary of True/False that state if the record is essential for the output -
-                            If essential and not found The RecordSetNotComplete exception is thrown
-        :param interpolation_map: Dictionary specifying interpolation method
-        :return: pandas DataFrame with requested data.
-        """
-        import pandas as pd
-
-        # default units
-        default_units = {
-            "runoff": RUNOFF_RATE_LMIN_UNIT_ID,  # in l.min-1
-            "sediment_concentration": SS_CONCENTRATION_GL_UNIT_ID,  # in g.l-1
-            "rainfall_intensity": RAINFALL_INTENSITY_MMH_UNIT_ID,  # in mm.hour-1
-            "sediment_flux": SEDIMENT_FLUX_GMIN_UNIT_ID,  # in g.min-1
-        }
-
-        # default labels map
-        default_labels = {
-            "runoff": "runoff [l.s-1]",
-            "sediment_concentration": "sediment concentration [g.l-1]",
-            "rainfall_intensity": "rainfall intensity [mm.hour-1]",
-            "rainfall_total": "rainfall total [mm]",
-            "discharge": "discharge [l]",
-            "sediment_flux": "sediment flux [g.min-1]",
-            "sediment_yield": "sediment yield [g]"
-        }
-
-        # default interpolation map
-        default_interpolations = {
-            "runoff": "linear",
-            "sediment_concentration": "linear",
-            "rainfall_intensity": "ffill",
-            "sediment_flux": "linear"
-        }
-
-        # normalize maps
-        labels_map = labels_map or {}
-        request_map = request_map or {}
-        interpolation_map = interpolation_map or {}
-
-        labels = {k: labels_map.get(k, v) for k, v in default_labels.items()}
-        requested = {k: request_map.get(k, False) for k in default_labels.keys()}
-        interpolations = {k: interpolation_map.get(k, v) for k, v in default_interpolations.items()}
-
-        # dependencies
-        dependencies = {
-            "rainfall_intensity": [{"record": self.get_best_record_of_unit, "derived_from": []}],
-            "rainfall_total": [{"derived_from": ["rainfall_intensity"]}],
-            "runoff": [{"record": self.get_best_record_of_unit, "derived_from": []}],
-            "sediment_concentration": [{"record": self.get_best_record_of_unit, "derived_from": []}],
-            "discharge": [{"derived_from": ["runoff"]}],
-            "sediment_flux": [
-                {"record": self.get_best_record_of_unit},
-                {"derived_from": ["runoff", "sediment_concentration"]}
-            ],
-            "sediment_yield": [{"derived_from": ["sediment_flux"]}],
-        }
-
-        # resolve present records
-        requested_keys = [k for k, v in requested.items() if v]
-        present_records, missing_records, derived_sources, skipped_derived = self._resolve_present_records(requested_keys, dependencies, default_units)
-
-        # print(f"present records: {present_records}")
-        # print(f"missing records: {missing_records}")
-        # print(f"derived sources: {derived_sources}")
-        # print(f"derived skipped: {skipped_derived}")
-        if missing_records:
-            raise RecordSetNotComplete(requested_keys, missing_records)
-
-        # collect data
-        dataframes_to_merge = []
-        empty_dataframes = []
-
-        for key, rec in present_records.items():
-            if rec:
-                try:
-                    unit_id = default_units.get(key)
-                    df = self._get_record_data(rec, key, key, demand_timeline=True, target_unit_id=unit_id)
-                except DataframeEmptyError:
-                    empty_dataframes.append(key)
-                else:
-                    dataframes_to_merge.append(df)
-            else:
-                # self.runoffdb.log(self.id, f"{key} record not available")
-                dataframes_to_merge.append(pd.DataFrame({key: []}))
-
-        if empty_dataframes:
-            raise RecordSetNotComplete(requested_keys, empty_dataframes)
-
-        # merge
-        if len(dataframes_to_merge) > 1:
-            merged_data = pd.concat(dataframes_to_merge, axis=1, join='outer')
-        elif dataframes_to_merge:
-            merged_data = dataframes_to_merge[0]
-        else:
-            merged_data = pd.DataFrame(columns=list(default_labels.keys()))
-
-        # add missing keys to keep all columns
-        for key in default_labels:
-            if key not in merged_data:
-                merged_data[key] = pd.NA
-
-        merged_data.index = pd.to_timedelta(merged_data.index, errors='raise')
-        merged_data.sort_index(inplace=True)
-
-        # interpolate
-        merged_data = self._interpolate_data(merged_data, interpolations)
-
-        # calculate derived fields using **internal keys**
-        if "rainfall_intensity" in merged_data and not merged_data["rainfall_intensity"].empty:
-            integrate_data_series(merged_data, "rainfall_intensity", "rainfall_total", interpolate=True,
-                                  time_unit='hours')
-
-        if "runoff" in merged_data and not merged_data["runoff"].empty:
-            integrate_data_series(merged_data, "runoff", "discharge", interpolate=True, time_unit='minutes')
-
-        # calculate the sediment flux only if not directly loaded (= is not stored in database as record)
-        if "sediment_flux" not in merged_data or merged_data["sediment_flux"].empty:
-            if all(k in merged_data for k in ["runoff", "sediment_concentration"]):
-                merged_data["sediment_flux"] = merged_data["runoff"] * merged_data["sediment_concentration"]
-
-        if "sediment_flux" in merged_data and not merged_data["sediment_flux"].empty:
-            integrate_data_series(merged_data, "sediment_flux", "sediment_yield", interpolate=True, time_unit='minutes')
-
-        # rename columns according to labels_map / defaults
-        merged_data = merged_data.rename(columns=labels)
-
-        # handle derived sources
-        for key, sources in derived_sources.items():
-            # if all sources are available in merged_data
-            if all(src in merged_data for src in sources):
-                # self.runoffdb.log(self.id, f"{key} derived from {', '.join(sources)} at runtime")
-                pass
-            else:
-                # log missing sources and leave it empty
-                missing_inputs = [src for src in sources if src not in merged_data]
-                # self.runoffdb.log(self.id, f"{key} derivation skipped (missing sources: {', '.join(missing_inputs)})")
-                merged_data[key] = pd.NA
-
-        return merged_data
-
-
-    def get_info_array(self, line=None, no_data_value=None, lang="en"):
-        """
-        Returns basic simulation run properties as array with values corresponding to attribute names (header strings)
-        that are defined 'get_info_headers()'
-        :param line: existing array of properties value or None (starting with empty list)
-        :param no_data_value: No Data value to be used in output
-        :param lang: language string identifier (currently implemented 'en' and 'cz')
-        :return:
-        """
-
-        headers = {"cz": [], "en": []}
-        line = line or []
-
-        if lang not in headers.keys():
-            raise ValueError()
-
-        # gather all the info and values common for the whole simulation run ===================================
-        # id of sequence the run belungs to
-        headers["cz"].append("ID sekvence")
-        headers["en"].append("sequence ID")
-        line.append(self.sequence_id)
-        # id of the run
-        headers["cz"].append("ID simulace")
-        headers["en"].append("run ID")
-        line.append(self.id)
-        # id of locality where the run took place
-        "ID lokality"
-        headers["cz"].append("ID lokality")
-        headers["en"].append("locality ID")
-        line.append(self.locality.id)
-        # name of the locality where the run took place
-        headers["cz"].append("lokalita")
-        headers["en"].append("locality")
-        line.append(self.locality.name)
-        # date of the run
-        headers["cz"].append("datum")
-        headers["en"].append("date")
-        line.append(czech_date(self.datetime))
-        # id of the plot where the run was executed
-        headers["cz"].append("ID plochy")
-        headers["en"].append("plot ID")
-        line.append(self.plot_id)
-        # name of the plot where the run was executed
-        headers["cz"].append("název plochy")
-        headers["en"].append("plot name")
-        line.append(self.plot.name)
-        # length in meters of the plot where the run was executed
-        headers["cz"].append("délka plochy [m]")
-        headers["en"].append("plot length [m]")
-        line.append(self.plot.plot_length)
-        headers["cz"].append("šířka plochy [m]")
-        headers["en"].append("plot width [m]")
-        line.append(self.plot.plot_width)
-        headers["cz"].append("sklon plochy [%]")
-        headers["en"].append("plot slope [%]")
-        line.append(self.plot.plot_slope)
-        headers["cz"].append("poznámky k ploše")
-        headers["en"].append("plot notes")
-        line.append(self.plot.get_note(lang=lang, no_data_value=no_data_value))
-        headers["cz"].append("dnů od zasetí")
-        headers["en"].append("days since seeding")
-        line.append(self.plot.days_since_seeding(self.datetime, main_crop_only=True) or no_data_value)
-        headers["cz"].append("ochranná opatření")
-        headers["en"].append("soil protection measures")
-        line.append(self.plot.get_protection_measures_names(lang) or no_data_value)
-        headers["cz"].append("ID simulátoru")
-        headers["en"].append("simulator ID")
-        line.append(self.simulator.id)
-        headers["cz"].append("simulátor")
-        headers["en"].append("simulator")
-        line.append(self.simulator.name[lang])
-        headers["cz"].append("ID plodiny")
-        headers["en"].append("crop ID")
-        line.append(self.crop_id if self.crop_id else no_data_value)
-        headers["cz"].append("plodina")
-        headers["en"].append("crop")
-        line.append(self.crop.name[lang] if self.crop else no_data_value)
-        headers["cz"].append("stav plodiny")
-        headers["en"].append("crop condition")
-        line.append(f"\"{self.crop_condition[lang]}\"" if self.crop_condition[lang] else no_data_value)
-        headers["cz"].append("výška plodiny [cm]")
-        headers["en"].append("crop height [cm]")
-        line.append(self.get_crop_height_value() or no_data_value)
-        headers["cz"].append("počet rostlin [1/m2]")
-        headers["en"].append("plant density [pcs.m^2]")
-        line.append(self.get_plant_density_value() or no_data_value)
-        headers["cz"].append("BBCH")
-        headers["en"].append("BBCH")
-        line.append(self.bbch or no_data_value)
-        headers["cz"].append("zakrytí povrchu [%]")
-        headers["en"].append("surface cover [%]")
-        line.append(self.get_surface_cover_value() or no_data_value)
-        headers["cz"].append("počáteční stav")
-        headers["en"].append("initial cond.")
-        line.append(self.run_type.name[lang])
-        headers["cz"].append("počáteční vlhkost")
-        headers["en"].append("init. moisture")
-        line.append(self.get_initial_moisture_value() or no_data_value)
-
-        # get and transform soil texture data
-        headers["cz"].extend(["<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>"])
-        headers["en"].extend(["<0, 0.002mm>", "<0.002, 0.063mm>", "<0.063, 2mm>"])
-        WRB_fraction_limits = [0.002, 0.063, 2]
-        try:
-            texture_data = self.get_best_soil_texture_data("cumulative_mass_content", "particle_size",
-                                                          index_column="particle_size",
-                                                          order_by="particle_size",
-                                                          limits=WRB_fraction_limits)
-        except DataframeEmptyError as dee:
-            line.extend(len(WRB_fraction_limits) * [no_data_value])
-            self.runoffdb.log(self.id, f"soil texture data missing: {dee.message}")
-
-        else:
-            if texture_data is not None:
-                for i, cl in enumerate(WRB_fraction_limits):
-                    line.append(texture_data.loc[WRB_fraction_limits[i], 'cumulative_mass_content'])
-            else:
-                line.extend(len(WRB_fraction_limits) * [no_data_value])
-
-        # get bulk density data
-        headers["cz"].append("objemová hmotnost [g/cm3]")
-        headers["en"].append("bulk density [g.cm-3]")
-        try:
-            line.append(self.get_best_bulk_density_value(27) or no_data_value)
-        except DataframeEmptyError as dee:
-            line.append(no_data_value)
-            self.runoffdb.log(self.id, f"bulk density data missing: {dee.message}")
-
-        # headers["cz"].append("intenzita srážky [mm/h]")
-        # headers["en"].append("rain intensity [mm.h-1]")
-        # try:
-        #     line.append(self.get_rainfall_intensity_value(6) or no_data_value)
-        # except DataframeEmptyError as dee:
-        #     line.append(no_data_value)
-        #     self.runoffdb.log(self.id, f"rainfall intensity data missing: {dee.message}")
-
-        headers["cz"].append("TTR")
-        headers["en"].append("time to runoff")
-        line.append(self.ttr)
-
-        return line, headers[lang]
-
-    def _resolve_present_records(self, requested_keys, dependencies, units=None):
-        """
-        loads all available records, supports priority list of dependency options per key.
-        automatically passes the unit_id from default_units[key] to get_best_record_of_unit().
-        :return: (present_records, missing_records, derived_sources, skipped_derived)
-        """
-        present_records = {}
-        missing_records = []
-        derived_sources = {}
-        skipped_derived = {}
-
-        for key, configs in dependencies.items():
-            # normalize to list
-            if isinstance(configs, dict):
-                configs = [configs]
-
-            record = None
-            source_info = None
-
-            for config in configs:
-                if "record" in config:
-                    record_source = config["record"]
-
-                    try:
-                        # if record_source is callable (e.g., self.get_best_record_of_unit)
-                        if callable(record_source):
-                            # if it expects a unit_id, provide it from default_units if available
-                            if units and key in units:
-                                record = record_source(units[key])
-                            else:
-                                record = record_source()
-                        else:
-                            # already a record instance
-                            record = record_source
-                    except Exception:
-                        record = None
-
-                    if record is not None:
-                        source_info = {"type": "record"}
-                        break  # found usable record
-
-                elif "derived_from" in config:
-                    if not source_info:
-                        source_info = {"type": "derived", "from": config["derived_from"]}
-
-            present_records[key] = record
-
-            if source_info and source_info["type"] == "derived":
-                derived_sources[key] = source_info["from"]
-
-            # mark missing requested records (no record, no derived path)
-            if key in requested_keys and record is None and not source_info:
-                missing_records.append(key)
-
-        return present_records, missing_records, derived_sources, skipped_derived
-
-    def _get_record_data(self, record, label, log_label, demand_timeline=False, target_unit_id=None):
-        """
-        Fetches data for a specific record, optionally converts it to target unit, and logs its status.
-        :return: DataFrame with the data for the record.
-        """
-        import pandas as pd
-
-        try:
-            if target_unit_id is not None and target_unit_id != record.unit_id:
-                df = record.get_data_in_unit(
-                    target_unit_id=target_unit_id,
-                    value_name=label,
-                    output_column_label=label,
-                    demand_timeline=demand_timeline
-                )
-                if df is not None and not df.empty:
-                    self.runoffdb.log(self.id, f"{log_label} (record #{record.id}) data converted to unit: {self.runoffdb.units[target_unit_id].unit} (original unit {record.unit.unit})")
-            else:
-                df = record.get_data(label, demand_timeline=demand_timeline)
-                if df is not None and not df.empty:
-                    self.runoffdb.log(self.id, f"{log_label} (record #{record.id}) data unit: {record.unit.unit}")
-
-            return df
-
-        except DataframeEmptyError:
-            # self.runoffdb.log(self.id, f"{log_label} DataFrame of record #{record.id} is empty")
-            return pd.DataFrame({label: []})
-        except DataframeNotTimeIndexed:
-            # self.runoffdb.log(self.id, f"{log_label} DataFrame of record #{record.id} is not timeline")
-            return pd.DataFrame({label: []})
-        except Exception as e:
-            # self.runoffdb.log(self.id, f"{log_label} record not available:\n{e}")
-            return pd.DataFrame({label: []})
-
-    def _adjust_end_time(self, merged_data, kwargs):
-        """
-        Adjusts the end time based on the last valid index of runoff or sediment concentration.
-        :return: Adjusted dataframe.
-        """
-        runoff_label = kwargs.get("runoff")
-        sed_conc_label = kwargs.get("sediment_concentration")
-
-        end_time = min(
-            merged_data[runoff_label].last_valid_index(),
-            merged_data[sed_conc_label].last_valid_index()
-        )
-        merged_data = merged_data.loc[:end_time]
-        return merged_data
-
-    def _interpolate_data(self, df, interpolation_map):
-        """
-        Interpolates missing data in the dataframe according to the provided method map.
-        :param df: The dataframe to interpolate.
-        :param interpolation_map: Dict of column -> method (e.g., {'col1': 'linear', 'col2': 'ffill'})
-        :return: Interpolated dataframe.
-        """
-        for column, method in interpolation_map.items():
-            if column in df:
-                if method == "ffill":
-                    df[column] = df[column].ffill()
-                elif method == "bfill":
-                    df[column] = df[column].bfill()
-                elif method in ("linear", "quadratic", "cubic", "spline", "polynomial"):
-                    df[column] = df[column].interpolate(method=method)
-                elif callable(method):
-                    df[column] = method(df[column])
-                else:
-                    raise ValueError(f"Unsupported interpolation method: {method} for column {column}")
-        return df
 
     def get_reference_run(self):
         if self.reference_run_id is None:
