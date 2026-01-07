@@ -1,3 +1,143 @@
+from typing import Iterable, Optional
+import pandas as pd
+
+from src.exceptions import DataframeEmptyError
+from src.setup.unit_ids import *
+from src.services.record_resolution import get_best_record_of_unit, get_record_data
+from src.entities.record import *
+
+
+# public API
+def get_best_bulk_density_record(*, run) -> Optional["Record"]:
+    """
+    Resolve the best available bulk density record for a run.
+
+    Resolution order:
+    1. Dedicated bulk density soil sample record (if assigned)
+    2. Best available bulk density record by unit / phenomenon
+    """
+
+    # 1. dedicated bulk density soil sample
+    bulkd_ss = getattr(run, "bulkd_ss", None)
+
+    if bulkd_ss is not None:
+        record_id = getattr(bulkd_ss, "bulk_density_id", None)
+        if record_id is not None:
+            record = run.runoffdb.load_record_by_id(record_id)
+            if record is not None:
+                return record
+            return None
+
+        return None
+
+    # 2. fallback: any bulk density record
+    return get_best_record_of_unit(
+        run=run,
+        unit_id=[BULK_DENSITY_GCM_UNIT_ID, BULK_DENSITY_KGM_UNIT_ID],
+        phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
+    )
+
+def get_best_bulk_density_value(
+    *,
+    run,
+    target_unit_id: Optional[int] = None,
+    label: str = "bulk_density",
+) -> Optional[float]:
+    """
+    Return mean bulk density value for the run, if available.
+    """
+
+    record = get_best_bulk_density_record(run=run)
+    if record is None:
+        return None
+
+    try:
+        df = get_record_data(
+            run=run,
+            record=record,
+            key=label,
+            target_unit_id=target_unit_id,
+        )
+    except DataframeEmptyError:
+        raise
+
+    if df is None or df.empty:
+        return None
+
+    return df[label].mean()
+
+
+def get_best_soil_texture_record(*, run):
+    """
+    Resolves the best soil texture record for a run.
+
+    Resolution order:
+    1. dedicated soil texture sample record
+    2. best available generic texture record
+    """
+
+    # 1. dedicated texture soil sample
+    ss = getattr(run, "texture_ss", None)
+    if ss and ss.texture_record_id:
+        record = run.runoffdb.load_record_by_id(ss.texture_record_id)
+        if record:
+            return record
+
+    # 2. fallback: generic texture record
+    try:
+        return get_best_record_of_unit(run=run, unit_id=CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID, phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID)
+    except Exception:
+        return None
+
+
+def get_best_soil_texture_data(
+    *,
+    run,
+    x_label: str = "cumulative_mass_content",
+    y_label: str = "particle_size",
+    order_by: Optional[str] = None,
+    limits: Optional[Iterable[float]] = None,
+    return_int: bool = False,
+    return_cumulative: bool = False,
+) -> Optional[pd.DataFrame]:
+    """
+    Returns best available soil texture data for a run.
+
+    - prefers dedicated texture sample
+    - falls back to best generic texture record
+    - optionally interpolates to given limits
+    """
+
+    order_by = order_by or DB_2ND_DIM_VALUE_COLUMN
+
+    texture_record = get_best_soil_texture_record(run=run)
+    if texture_record is None:
+        return None
+
+    try:
+        df = texture_record.get_data(
+            value_label=x_label,
+            related_x=y_label,
+            index_column=y_label,
+            order_by=order_by,
+        )
+    except DataframeEmptyError:
+        raise
+
+    if df is None or df.empty:
+        return None
+
+    if limits:
+        df = interpolate_texture(
+            df,
+            limits,
+            x_label,
+            return_int=return_int,
+            return_cumulative=return_cumulative,
+        )
+
+    return df
+
 
 def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative=True, return_int=True, smallest_content=1):
     import pandas as pd

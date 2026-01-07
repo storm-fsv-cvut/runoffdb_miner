@@ -60,7 +60,8 @@ class RunoffDB:
 
     def __exit__(self, exc_type, exc_value, traceback):
         # write the log
-        self.save_log()
+        # self.save_log()
+        return
 
     def get_connection(self):
         return self.dbcon.pool.get_connection()

@@ -6,6 +6,9 @@
 # crops
 CULTIVATED_FALLOW_CROP_ID = 1
 
+# crop types
+NO_COVER_CROP_TYPE_ID = 10
+
 # agricultural tillage operations
 MAIN_CROP_SEEDING_OPERATION_TYPE_ID = 3
 AUX_CROP_SEEDING_OPERATION_TYPE_ID = 8

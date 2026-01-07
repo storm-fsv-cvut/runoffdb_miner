@@ -16,12 +16,19 @@ if __name__ == '__main__':
     # lang = "cz"
     lang = "en"
 
-    filter = RunFilter(date_from=datetime.fromisoformat("2021-05-26"),
-                     date_to=datetime.fromisoformat("2021-07-15"),
-                     simulators=None,  # [7, 10],
-                     localities=None,
-                     crops=None,
-                     with_runoff_only=False)
+    filter = RunFilter(date_from=datetime.fromisoformat("2018-07-02"),
+                       date_to=datetime.fromisoformat("2018-07-03"),
+                       simulators=None,  # [7, 10],
+                       localities=None,
+                       crops=None,
+                       with_runoff_only=False)
+
+    # filter = RunFilter(date_from=datetime.fromisoformat("2025-01-01"),
+    #                    date_to=datetime.fromisoformat("2025-12-31"),
+    #                    simulators=None,  # [7, 10],
+    #                    localities=None,
+    #                    crops=None,
+    #                    with_runoff_only=False)
 
     with Miner(filter) as miner:
 

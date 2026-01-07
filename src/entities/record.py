@@ -5,6 +5,12 @@ from ..setup.table_names import *
 from ..exceptions import DataframeEmptyError, DataframeNotTimeIndexed
 from ..utilities.utilities import *
 
+# column name constants
+DB_1ST_DIM_VALUE_COLUMN = "value"
+DB_2ND_DIM_VALUE_COLUMN = "related_value_x"
+DB_3RD_DIM_VALUE_COLUMN = "related_value_y"
+DB_4TH_DIM_VALUE_COLUMN = "related_value_z"
+DB_TIME_COLUMN = "time"
 
 class Record:
 
@@ -46,10 +52,6 @@ class Record:
 
         self.data = None
 
-        if multipliers.get(self.unit_id):
-            self.multiplier_to_SI = multipliers.get(self.unit_id)
-        else:
-            self.multiplier_to_SI = None
 
     def __str__(self):
         string = f"record #{self.id}: unit #{self.unit_id}, record type {self.record_type_id}, quality index {self.quality_index_id}"
@@ -88,7 +90,7 @@ class Record:
         print(indent*"\t"+f"\tz: {self.related_value_z_unit_id} - {self.unit_rel_z.name[lang]} [{self.unit_rel_z.unit}]") if self.related_value_z_unit_id else None
         return
 
-    def load_data(self, value_name, related_x=None, related_y=None, related_z=None, index_column=None, order_by=None):
+    def _load_data(self, value_label, related_x=None, related_y=None, related_z=None, index_column=None, order_by=None):
         import pandas as pd
 
         more = ""
@@ -115,16 +117,14 @@ class Record:
                 more += f" AS rel_value_z"
 
         if order_by is not None:
-            order_by = f" ORDER BY `{order_by}` ASC"
+            order_clause = f" ORDER BY `{order_by}` ASC"
         elif self.is_timeline:
-            order_by = f" ORDER BY `time` ASC"
+            order_clause = f" ORDER BY `time` ASC"
         else:
-            order_by = ""
+            order_clause = ""
 
         select_time = "`time`, " if self.is_timeline else ""
-        query = f"SELECT {select_time}`value` AS {value_name} {more} FROM {data_table} WHERE `record_id` = {self.id}{order_by}"
-
-
+        query = f"SELECT {select_time}`value` AS {value_label} {more} FROM {data_table} WHERE `record_id` = {self.id}{order_clause}"
 
         with self.runoffdb.get_connection() as dbcon:
             result_dataFrame = pd.read_sql(query, dbcon)
@@ -136,76 +136,87 @@ class Record:
             if not result_dataFrame.empty:
                 self.data = result_dataFrame
             else:
-                raise DataframeEmptyError(value_name, self.id)
+                raise DataframeEmptyError(value_label, self.id)
             return result_dataFrame
 
-    def get_data(self, value_name="value", related_x="rel_value_x", related_y="rel_value_y", related_z="rel_value_z", index_column=None, remove_last_zero=False, demand_timeline=False):
-        """
-        Return self.data if there were any data loaded.
-        Tries loading the data if self.data is None.
-        :param value_name: the label to be assigned to the column in output dataframe
-        :param index_column: label of column to be used as index column
-        :param remove_last_zero: Whether to remove last row if the value in the row is equal to 0
-        :param demand_timeline: raises DataframeNotTimeIndexed exception if demand_timeline=True but the obtained data are not
-        :return: pandas Dataframe object with data loaded from DB or None if the self.data is empty
-        """
+    def get_data(
+            self,
+            *,
+            value_label="value",
+            related_x="rel_value_x",
+            related_y="rel_value_y",
+            related_z="rel_value_z",
+            index_column=None,
+            order_by=None,
+            remove_last_zero=False,
+            demand_timeline=False,
+    ):
         import pandas as pd
-        if self.data is not None:
-            if remove_last_zero:
-                return remove_last_zero_row(self.data)
-            else:
-                if not self.data.empty:
 
-                    if demand_timeline and not isinstance(self.data.index, pd.TimedeltaIndex):
-                        raise DataframeNotTimeIndexed(self.id)
-                    else:
-                        return self.data
-        else:
-            # the data may not be loaded yet
+        if self.data is None:
             try:
-                self.load_data(value_name=value_name, related_x=related_x, related_y=related_y, related_z=related_z, index_column=index_column)
+                self.data = self._load_data(
+                    value_label=value_label,
+                    related_x=related_x,
+                    related_y=related_y,
+                    related_z=related_z,
+                    index_column=index_column,
+                    order_by=order_by
+                )
             except DataframeEmptyError:
+                self.data = pd.DataFrame()
                 raise
 
-            return self.get_data(value_name, related_x, related_y, related_z, index_column, remove_last_zero, demand_timeline)
-
-    def get_data_in_unit(self, target_unit_id, value_name="value", related_x="rel_value_x", related_y="rel_value_y", related_z="rel_value_z", index_column=None, remove_last_zero=False, demand_timeline=False, output_column_label=None):
-        """
-        Return self.data with 'value' multiplied by the unit's multiplier to SI (if there were any data loaded).
-        Tries loading the data if self.data is None.
-
-        :return: pandas Dataframe object with data loaded from DB or None if the self.data is empty, values in SI units
-        """
-        try:
-            self.get_data(value_name, related_x, related_y, related_z,  index_column, remove_last_zero, demand_timeline)
-        except DataframeEmptyError:
-            raise
-
-        if self.data is not None:
-            # if not self.data.empty:
-            if target_unit_id == self.unit_id:
-                return self.data
-            if target_unit_id is None:
-                print(f"Unit ID for data retrieval was not specified - returning in original unit: {self.unit_id} ({self.unit.unit})!")
-                return self.data
-            output_column_label = output_column_label or value_name
-
-            multiply_by = multipliers.get(self.unit_id).get(target_unit_id)
-            if not multiply_by:
-                print(f"Unit id {self.unit_id} doesn't have multiplier defined for conversion to unit id {target_unit_id}!")
-                print(multipliers)
-                return None
-            elif multiply_by != 1:
-                if remove_last_zero:
-                    data_out = remove_last_zero_row(self.data)
-                else:
-                    data_out = self.data.copy()
-                data_out[output_column_label] = data_out[value_name] * multiply_by
-                return data_out
-            else:
-                return self.data
-        else:
+        if self.data.empty:
             return None
+
+        if demand_timeline and not isinstance(self.data.index, pd.TimedeltaIndex):
+            raise DataframeNotTimeIndexed(self.id)
+
+        data = self.data
+
+        if remove_last_zero:
+            data = remove_last_zero_row(data)
+
+        return data
+    #
+    # def get_data_in_unit(self, target_unit_id, value_name="value", related_x="rel_value_x", related_y="rel_value_y", related_z="rel_value_z", index_column=None, remove_last_zero=False, demand_timeline=False, output_column_label=None):
+    #     """
+    #     Return self.data with 'value' multiplied by the unit's multiplier to SI (if there were any data loaded).
+    #     Tries loading the data if self.data is None.
+    #
+    #     :return: pandas Dataframe object with data loaded from DB or None if the self.data is empty, values in SI units
+    #     """
+    #     try:
+    #         self.get_data(value_name, related_x, related_y, related_z,  index_column, remove_last_zero, demand_timeline)
+    #     except DataframeEmptyError:
+    #         raise
+    #
+    #     if self.data is not None:
+    #         # if not self.data.empty:
+    #         if target_unit_id == self.unit_id:
+    #             return self.data
+    #         if target_unit_id is None:
+    #             print(f"Unit ID for data retrieval was not specified - returning in original unit: {self.unit_id} ({self.unit.unit})!")
+    #             return self.data
+    #         output_column_label = output_column_label or value_name
+    #
+    #         multiply_by = multipliers.get(self.unit_id).get(target_unit_id)
+    #         if not multiply_by:
+    #             print(f"Unit id {self.unit_id} doesn't have multiplier defined for conversion to unit id {target_unit_id}!")
+    #             print(multipliers)
+    #             return None
+    #         elif multiply_by != 1:
+    #             if remove_last_zero:
+    #                 data_out = remove_last_zero_row(self.data)
+    #             else:
+    #                 data_out = self.data.copy()
+    #             data_out[output_column_label] = data_out[value_name] * multiply_by
+    #             return data_out
+    #         else:
+    #             return self.data
+    #     else:
+    #         return None
 
     def get_metadata(self, lang="en"):
         meta = {"record ID": self.id,

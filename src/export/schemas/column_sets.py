@@ -3,8 +3,12 @@ from src.utilities.utilities import czech_date, format_timedelta
 
 from src.export.schemas.column_schemas import RunColumn
 from src.utilities.utilities import czech_date
+from src.services.soil_data import *
+from src.services.hydro_data import *
+from src.services.record_resolution import *
 from src.exceptions import DataframeEmptyError
 
+from pandas import Timedelta
 
 WRB_FRACTION_LIMITS = [0.002, 0.063, 2]
 
@@ -12,11 +16,10 @@ WRB_FRACTION_LIMITS = [0.002, 0.063, 2]
 def _soil_texture_value(limit):
     def getter(run, ctx):
         try:
-            df = run.get_best_soil_texture_data(
-                "cumulative_mass_content",
-                "particle_size",
-                index_column="particle_size",
-                order_by="particle_size",
+            df = get_best_soil_texture_data(
+                run=run,
+                x_label="cumulative_mass_content",
+                y_label="particle_size",
                 limits=WRB_FRACTION_LIMITS,
             )
         except DataframeEmptyError:
@@ -137,13 +140,13 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     RunColumn(
         header={"cz": "výška plodiny [cm]", "en": "crop height [cm]"},
         getter=lambda r, ctx:
-            r.get_crop_height_value() or ctx["no_data_value"],
+            get_crop_height_value(run=r) or ctx["no_data_value"],
     ),
 
     RunColumn(
         header={"cz": "počet rostlin [1/m2]", "en": "plant density [pcs.m^2]"},
         getter=lambda r, ctx:
-            r.get_plant_density_value() or ctx["no_data_value"],
+            get_plant_density_value(run=r) or ctx["no_data_value"],
     ),
 
     RunColumn(
@@ -154,7 +157,7 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     RunColumn(
         header={"cz": "zakrytí povrchu [%]", "en": "surface cover [%]"},
         getter=lambda r, ctx:
-            r.get_surface_cover_value() or ctx["no_data_value"],
+            get_surface_cover_value(run=r, multi_value=False) or ctx["no_data_value"],
     ),
 
     RunColumn(
@@ -163,9 +166,9 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     ),
 
     RunColumn(
-        header={"cz": "počáteční vlhkost", "en": "init. moisture"},
+        header={"cz": "počáteční vlhkost [%V]", "en": "init. moisture [%V]"},
         getter=lambda r, ctx:
-            r.get_initial_moisture_value() or ctx["no_data_value"],
+            get_initial_moisture_value(run=r, multi_value=False) or ctx["no_data_value"],
     ),
 
     # --- soil texture fractions ---
@@ -187,12 +190,18 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     RunColumn(
         header={"cz": "objemová hmotnost [g/cm3]", "en": "bulk density [g.cm-3]"},
         getter=lambda r, ctx:
-            r.get_best_bulk_density_value(27) or ctx["no_data_value"],
+            get_best_bulk_density_value(run=r, target_unit_id=BULK_DENSITY_GCM_UNIT_ID) or ctx["no_data_value"],
     ),
 
     RunColumn(
         header={"cz": "TTR", "en": "time to runoff"},
         getter=lambda r, ctx: r.ttr,
+    ),
+
+    RunColumn(
+        header={"cz": "intenzita srážky [mm/h]", "en": "rainfall intensity [mm.hour-1]"},
+        getter=lambda r, ctx:
+            get_rainfall_intensity_value(run=r, target_unit_id=RAINFALL_INTENSITY_MMH_UNIT_ID),
     ),
 ]
 
@@ -208,7 +217,8 @@ INTERVAL_COLUMNS: list[IntervalColumn] = [
         header={"cz": "délka intervalu", "en": "interval duration"},
         getter=lambda run, row, ctx, st:
             format_timedelta(st["index"] - st["prev_index"])
-            if st["prev_index"] is not None else ctx["no_data_value"],
+            if st["prev_index"] is not None and (delta := st["index"] - st["prev_index"]) >= Timedelta(0)
+            else ctx["no_data_value"]
     ),
 
     IntervalColumn(
@@ -221,7 +231,8 @@ INTERVAL_COLUMNS: list[IntervalColumn] = [
         header={"cz": "t2", "en": "t2"},
         getter=lambda run, row, ctx, st:
             format_timedelta(st["index"] - run.ttr)
-            if run.ttr is not None else ctx["no_data_value"],
+            if run.ttr is not None and (delta := st["index"] - run.ttr) >= Timedelta(0)
+            else ctx["no_data_value"],
     ),
 
     IntervalColumn(

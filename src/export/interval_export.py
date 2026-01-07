@@ -17,7 +17,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="N
 
     runs = list(miner.runs.values())
 
-    # --- headers ---
+    # collect headers
     run_headers = [c.header[lang] for c in RUN_INFO_COLUMNS]
     interval_headers = [c.header[lang] for c in INTERVAL_COLUMNS]
 
@@ -29,7 +29,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="N
 
     write_row_to_csv(output_csv, run_headers + interval_headers)
 
-    # --- per run ---
+    # collect data
     for run in runs:
         print(
             f"\n#{run.id} – {czech_date(run.datetime)} – "
@@ -76,7 +76,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="N
             write_row_to_csv(output_csv, run_line + empty_row)
             continue
 
-        # --- interval rows ---
+        # interval rows
         state = {
             "i": 1,
             "prev_index": None,
@@ -86,8 +86,8 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="N
         ctx["labels"] = labels
 
         print(
-            f"hydro_data rows={len(hydro_data)}, "
-            f"columns={list(hydro_data.columns)}, "
+            f"hydro_data rows={len(hydro_data)}, \n"
+            f"columns={list(hydro_data.columns)}, \n"
             f"index_type={type(hydro_data.index)}"
         )
 

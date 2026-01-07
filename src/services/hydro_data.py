@@ -1,65 +1,66 @@
 from __future__ import annotations
 
-from ..setup.unit_ids import *
-from .interpolation import *
-from .integration import *
-
 from typing import Dict, List, Optional
+
+from src.setup.unit_ids import *
+from src.services.interpolation import *
 
 from src.services.interpolation import interpolate_dataframe
 from src.services.integration import integrate_series
+from src.services.record_resolution import *
 
 from src.exceptions import RecordSetNotComplete, DataframeEmptyError, DataframeNotTimeIndexed
+from src.entities.run import Run
+
+# defaults
+
+DEFAULT_UNITS = {
+    "runoff": RUNOFF_RATE_LMIN_UNIT_ID,
+    "sediment_concentration": SS_CONCENTRATION_GL_UNIT_ID,
+    "rainfall_intensity": RAINFALL_INTENSITY_MMH_UNIT_ID,
+    "sediment_flux": SEDIMENT_FLUX_GMIN_UNIT_ID,
+}
+
+DEFAULT_LABELS = {
+    "runoff": "runoff",
+    "sediment_concentration": "sediment_concentration",
+    "rainfall_intensity": "rainfall_intensity",
+    "rainfall_total": "rainfall_total",
+    "discharge": "discharge",
+    "sediment_flux": "sediment_flux",
+    "sediment_yield": "sediment_yield",
+}
+
+DEFAULT_INTERPOLATIONS = {
+    "runoff": "linear",
+    "sediment_concentration": "linear",
+    "rainfall_intensity": "ffill",
+    "sediment_flux": "linear",
+}
+
 
 def get_best_hydro_data(
-    *,
-    run,
-    labels_map: Optional[Dict[str, str]] = None,
-    request_map: Optional[Dict[str, bool]] = None,
-    interpolation_map: Optional[Dict[str, str]] = None,
+        *,
+        run: "Run",
+        labels_map: Optional[Dict[str, str]] = None,
+        request_map: Optional[Dict[str, bool]] = None,
+        interpolation_map: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
     """
-    Assemble best available hydrological data for a run into a single
-    Timedelta-indexed DataFrame.
+    Assemble hydrological data for a run into a single Timedelta-indexed DataFrame.
 
     Semantics:
-    - If request_map[key] == True and data cannot be produced -> raise RecordSetNotComplete
-    - If all request_map values are False -> export whatever exists
+    - request_map[key] == True -> must exist, else raise RecordSetNotComplete
+    - all request_map values False -> export whatever exists
     """
-
-    # defaults
-
-    default_units = {
-        "runoff": RUNOFF_RATE_LMIN_UNIT_ID,
-        "sediment_concentration": SS_CONCENTRATION_GL_UNIT_ID,
-        "rainfall_intensity": RAINFALL_INTENSITY_MMH_UNIT_ID,
-        "sediment_flux": SEDIMENT_FLUX_GMIN_UNIT_ID,
-    }
-
-    default_labels = {
-        "runoff": "runoff",
-        "sediment_concentration": "sediment_concentration",
-        "rainfall_intensity": "rainfall_intensity",
-        "rainfall_total": "rainfall_total",
-        "discharge": "discharge",
-        "sediment_flux": "sediment_flux",
-        "sediment_yield": "sediment_yield",
-    }
-
-    default_interpolations = {
-        "runoff": "linear",
-        "sediment_concentration": "linear",
-        "rainfall_intensity": "ffill",
-        "sediment_flux": "linear",
-    }
 
     labels_map = labels_map or {}
     request_map = request_map or {}
     interpolation_map = interpolation_map or {}
 
-    labels = {k: labels_map.get(k, v) for k, v in default_labels.items()}
-    requested = {k: request_map.get(k, False) for k in default_labels}
-    interpolations = {k: interpolation_map.get(k, v) for k, v in default_interpolations.items()}
+    labels = {k: labels_map.get(k, v) for k, v in DEFAULT_LABELS.items()}
+    requested = {k: request_map.get(k, False) for k in DEFAULT_LABELS}
+    interpolations = {k: interpolation_map.get(k, v) for k, v in DEFAULT_INTERPOLATIONS.items()}
 
     # dependency graph
     dependencies = {
@@ -75,13 +76,8 @@ def get_best_hydro_data(
         "sediment_yield": [{"derived_from": ["sediment_flux"]}],
     }
 
-    # resolve records
-    present_records, derived_sources = _resolve_present_records(
-        run=run,
-        dependencies=dependencies,
-        requested=requested,
-        default_units=default_units,
-    )
+    # resolve present records
+    present_records, derived_sources = _resolve_present_records(run=run, dependencies=dependencies)
 
     # collect timelines
     dataframes: List[pd.DataFrame] = []
@@ -96,16 +92,9 @@ def get_best_hydro_data(
         if not record.is_timeline:
             continue
 
-        try:
-            df = _get_record_dataframe(
-                run=run,
-                record=record,
-                key=key,
-                target_unit_id=default_units.get(key),
-            )
-        except DataframeEmptyError:
-            if requested[key]:
-                missing_requested.append(key)
+        df = _get_record_timeline(run=run, record=record, key=key, target_unit_id=DEFAULT_UNITS.get(key))
+        if df.empty and requested[key]:
+            missing_requested.append(key)
             continue
 
         if not df.empty:
@@ -120,57 +109,42 @@ def get_best_hydro_data(
     if not dataframes:
         return pd.DataFrame(columns=list(labels.values()))
 
-    # merge timelines
+    # --- merge timelines ---
     merged = pd.concat(dataframes, axis=1, join="outer")
     merged.index = pd.to_timedelta(merged.index)
     merged.sort_index(inplace=True)
 
     # ensure all keys exist
-    for key in default_labels:
+    for key in DEFAULT_LABELS:
         if key not in merged:
             merged[key] = pd.NA
 
-    # interpolate
+    # --- interpolate ---
     merged = interpolate_dataframe(merged, interpolations)
 
-    # derive quantities
-    if merged["rainfall_intensity"].notna().any():
-        integrate_series(
-            merged,
-            "rainfall_intensity",
-            "rainfall_total",
-            time_unit="hours",
-        )
+    # --- derived quantities ---
+    for key, sources in derived_sources.items():
+        # check if all sources exist and have at least one non-NA value
+        if all(src in merged.columns and merged[src].notna().any() for src in sources):
+            if key == "rainfall_total":
+                integrate_series(merged, "rainfall_intensity", "rainfall_total", time_unit="hours")
+            elif key == "discharge":
+                integrate_series(merged, "runoff", "discharge", time_unit="minutes")
+            elif key == "sediment_flux":
+                # fill NaN with 0 only for multiplication
+                merged["sediment_flux"] = (
+                        merged["runoff"].fillna(0) * merged["sediment_concentration"].fillna(0)
+                ).replace(0, pd.NA)
+            elif key == "sediment_yield":
+                integrate_series(merged, "sediment_flux", "sediment_yield", time_unit="minutes")
 
-    if merged["runoff"].notna().any():
-        integrate_series(
-            merged,
-            "runoff",
-            "discharge",
-            time_unit="minutes",
-        )
-
-    if merged["sediment_flux"].isna().all():
-        if all(col in merged for col in ("runoff", "sediment_concentration")):
-            merged["sediment_flux"] = merged["runoff"] * merged["sediment_concentration"]
-
-    if merged["sediment_flux"].notna().any():
-        integrate_series(
-            merged,
-            "sediment_flux",
-            "sediment_yield",
-            time_unit="minutes",
-        )
-
-    # ------------------------------------------------------------------
-    # rename columns for export
-    # ------------------------------------------------------------------
-
+    # rename columns
     merged = merged.rename(columns=labels)
 
     return merged
 
-def _resolve_present_records(*, run, dependencies, requested, default_units):
+
+def _resolve_present_records(*, run, dependencies, units=DEFAULT_UNITS):
     present_records = {}
     derived_sources = {}
 
@@ -180,7 +154,7 @@ def _resolve_present_records(*, run, dependencies, requested, default_units):
 
         for cfg in configs:
             if "record" in cfg:
-                record = run.get_best_record_of_unit(default_units.get(key))
+                record = get_best_record_of_unit(run=run, unit_id=units.get(key))
                 if record:
                     break
             elif "derived_from" in cfg:
@@ -192,59 +166,160 @@ def _resolve_present_records(*, run, dependencies, requested, default_units):
 
     return present_records, derived_sources
 
+def get_best_rainfall_record(
+    *,
+    run,
+    view_order=None,
+):
+    """
+    Returns the best available rainfall intensity record for a run.
 
-def _get_record_dataframe(*, run, record, key, target_unit_id):
+    Preference order:
+    1. Dedicated rainfall intensity record explicitly assigned to the run
+    2. Best available rainfall intensity record matching known unit / phenomenon combinations
+    """
+
+    if run.rain_intensity_recid is not None:
+        return run.runoffdb.load_record_by_id(run.rain_intensity_recid)
+
+    # fallback: search for any suitable rainfall intensity record
+    return get_best_record_of_unit(
+        run=run,
+        unit_id=[RAINFALL_INTENSITY_MMH_UNIT_ID, RAINFALL_INTENSITY_MMMIN_UNIT_ID],
+        phenomenon_id=RAINFALL_PHEN_ID,
+        view_order=view_order,
+    )
+
+def get_rainfall_intensity_dataframe(
+    *,
+    run,
+    target_unit_id: Optional[int] = None,
+    series_label: str = "rain_intensity",
+) -> Optional[pd.DataFrame]:
+    """
+    Return rainfall intensity timeline DataFrame for a run, or None if invalid.
+
+    Validity rules:
+    - must be a timeline
+    - must contain at least two rows
+    - if exactly two rows, last value must be zero
+    """
+
+    rec_id = getattr(run, "rain_intensity_recid", None)
+    if rec_id is None:
+        return None
+
+    record = get_best_rainfall_record(run=run)
+    if record is None:
+        return None
+
+    try:
+        df = _get_record_timeline(
+            run=run,
+            record=record,
+            key=series_label,
+            target_unit_id=target_unit_id,
+        )
+    except DataframeEmptyError:
+        raise
+
+    if df is None or df.empty:
+        return None
+
+    if len(df.index) < 2:
+        return None
+
+    if len(df.index) == 2:
+        if df[series_label].iloc[-1] != 0:
+            return None
+
+    return df
+
+def get_rainfall_intensity_value(
+    *,
+    run,
+    target_unit_id: Optional[int] = None,
+) -> Optional[object]:
+    """
+    Return representative rainfall intensity value.
+
+    Returns:
+    - float → constant rainfall
+    - "interrupted"
+    - "variable"
+    - None → unavailable / invalid
+    """
+
+    try:
+        df = get_rainfall_intensity_dataframe(
+            run=run,
+            target_unit_id=target_unit_id,
+            series_label="rain_intensity",
+        )
+    except DataframeEmptyError:
+        return None
+
+    if df is None:
+        return None
+
+    values = df["rain_intensity"]
+
+    if len(values) == 2:
+        if values.iloc[-1] != 0:
+            return None
+        return values.iloc[0]
+
+    # variable / interrupted rainfall
+    zero_count = (values == 0).sum()
+
+    if zero_count > 1:
+        return "interrupted"
+
+    return "variable"
+
+def get_best_sediment_concentration_record(
+        *,
+        run,
+        view_order=None
+        ):
+    return get_best_record_of_unit(
+        run=run,
+        unit_id=[SS_CONCENTRATION_MGL_UNIT_ID, SS_CONCENTRATION_GL_UNIT_ID],
+        phenomenon_id=SEDIMENT_QUANTITY_PHEN_ID,
+        view_order=view_order)
+
+
+def get_best_runoff_record(
+        *,
+        run,
+        view_order=None
+        ):
+    return get_best_record_of_unit(
+        run=run,
+        unit_id=RUNOFF_RATE_LMIN_UNIT_ID,
+        phenomenon_id=SURFACE_RUNOFF_PHEN_ID,
+        view_order=view_order)
+
+def _get_record_timeline(*, run, record, key, target_unit_id):
+    """
+    Fetches data for a specific record, optionally converts it to target unit, and logs its status.
+    :return: DataFrame with the data for the record.
+    """
     if target_unit_id and record.unit_id != target_unit_id:
         return record.get_data_in_unit(
             target_unit_id=target_unit_id,
-            value_name=key,
+            value_label=key,
             output_column_label=key,
             demand_timeline=True,
         )
 
     return record.get_data(
-        key,
+        value_label=key,
         demand_timeline=True,
     )
 
 
-def _get_record_data(record, label, log_label, demand_timeline=False, target_unit_id=None):
-    """
-    Fetches data for a specific record, optionally converts it to target unit, and logs its status.
-    :return: DataFrame with the data for the record.
-    """
-    import pandas as pd
-
-    try:
-        if target_unit_id is not None and target_unit_id != record.unit_id:
-            df = record.get_data_in_unit(
-                target_unit_id=target_unit_id,
-                value_name=label,
-                output_column_label=label,
-                demand_timeline=demand_timeline
-            )
-            if df is not None and not df.empty:
-                self.runoffdb.log(self.id,
-                                  f"{log_label} (record #{record.id}) data converted to unit: {self.runoffdb.units[target_unit_id].unit} (original unit {record.unit.unit})")
-        else:
-            df = record.get_data(label, demand_timeline=demand_timeline)
-            if df is not None and not df.empty:
-                self.runoffdb.log(self.id, f"{log_label} (record #{record.id}) data unit: {record.unit.unit}")
-
-        return df
-
-    except DataframeEmptyError:
-        # self.runoffdb.log(self.id, f"{log_label} DataFrame of record #{record.id} is empty")
-        return pd.DataFrame({label: []})
-    except DataframeNotTimeIndexed:
-        # self.runoffdb.log(self.id, f"{log_label} DataFrame of record #{record.id} is not timeline")
-        return pd.DataFrame({label: []})
-    except Exception as e:
-        # self.runoffdb.log(self.id, f"{log_label} record not available:\n{e}")
-        return pd.DataFrame({label: []})
-
-
-def _adjust_end_time(self, merged_data, kwargs):
+def _adjust_end_time(merged_data, kwargs):
     """
     Adjusts the end time based on the last valid index of runoff or sediment concentration.
     :return: Adjusted dataframe.
