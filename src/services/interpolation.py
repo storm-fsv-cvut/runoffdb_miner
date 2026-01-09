@@ -15,10 +15,12 @@ def interpolate_dataframe(df: pd.DataFrame, methods: dict[str, Literal["linear",
     for col, method in methods.items():
         if col in result:
             if method == "linear":
-                result[col] = result[col].interpolate(method="linear", limit_direction="both")
+                # convert to numeric safely before linear interpolation
+                result[col] = pd.to_numeric(result[col], errors="coerce").interpolate(method="linear", limit_direction="both")
             elif method == "ffill":
                 result[col] = result[col].ffill()
     return result
+
 
 def get_value_in_time(
     df: pd.DataFrame, timedelta, series_name, zero_time=None,

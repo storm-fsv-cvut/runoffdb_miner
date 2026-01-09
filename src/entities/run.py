@@ -24,7 +24,7 @@ class Run:
         self.run_type = self.runoffdb.run_types[self.run_type_id]
         self.ttr = kwargs["ttr"]
         self.measurements = None
-        self.brothers = self.get_group_brothers_ids()
+        self.brothers = self.runoffdb.get_group_brothers_ids(self)
         self.plot_id = kwargs["plot_id"]
         self.plot = runoffdb.plots[self.plot_id]
         self.locality_id = kwargs["locality_id"]
@@ -95,27 +95,6 @@ class Run:
             print(f"\tno records at all")
         return
 
-    def get_group_brothers_ids(self):
-        """
-        Returns a list of IDs of simulation runs from the same group
-        :return:
-        """
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor() as thecursor:
-                # execute the query and fetch the results
-                query = f"SELECT `run`.`id` FROM {runs_table} WHERE `run_group_id` = {self.run_group_id}"
-
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results) > 0:
-                    brothers = []
-                    for r in results:
-                        if r[0] != self.id:
-                            brothers.append(r[0])
-                    return brothers
-                return None
 
     def get_reference_run(self):
         if self.reference_run_id is None:
@@ -156,27 +135,27 @@ class Run:
         else:
             return None
 
-    def load_measurements(self):
-        msrmsnts = None
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-                query = f"SELECT * FROM {measurements_table} " \
-                        f"JOIN {measurement_run_table} ON {measurement_run_table}.`measurement_id` = {measurements_table}.`id` " \
-                        f"WHERE {measurement_run_table}.`run_id` = {self.id}"
-                # print(query)
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results) == 0:
-                    # print(f"\tNo measurement found for run {self.id}")
-                    return {}
-                else:
-                    msrmsnts = {}
-                    for res in results:
-                        new_measurement = Measurement(self.runoffdb, **res)
-                        msrmsnts.update({new_measurement.id: new_measurement})
-        return msrmsnts
+    # def load_measurements(self):
+    #     msrmsnts = None
+    #     with self.runoffdb.get_connection() as dbcon:
+    #         with dbcon.cursor(dictionary=True) as thecursor:
+    #             query = f"SELECT * FROM {measurements_table} " \
+    #                     f"JOIN {measurement_run_table} ON {measurement_run_table}.`measurement_id` = {measurements_table}.`id` " \
+    #                     f"WHERE {measurement_run_table}.`run_id` = {self.id}"
+    #             # print(query)
+    #             thecursor.execute(query)
+    #             results = thecursor.fetchall()
+    #             thecursor.close()
+    #
+    #             if len(results) == 0:
+    #                 # print(f"\tNo measurement found for run {self.id}")
+    #                 return {}
+    #             else:
+    #                 msrmsnts = {}
+    #                 for res in results:
+    #                     new_measurement = Measurement(self.runoffdb, **res)
+    #                     msrmsnts.update({new_measurement.id: new_measurement})
+    #     return msrmsnts
 
     def get_measurements(self, phenomenon_id=None):
         if self.measurements:
@@ -194,29 +173,29 @@ class Run:
                 return out
         else:
             # the measurements are not loaded yet, try loading them
-            self.measurements = self.load_measurements()
+            self.measurements = self.runoffdb.load_measurements_of_run(self)
             if self.measurements:
                 return self.get_measurements(phenomenon_id)
             else:
                 return None
-
-    def get_project_ids(self):
-        ids = None
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor() as thecursor:
-                # execute the query and fetch the results
-                query = f"SELECT `project_id` FROM `sequence_project` WHERE `sequence_id` = {self.sequence_id}"
-
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results)> 0:
-                    ids = []
-                    for r in results:
-                        ids.append(r[0])
-        return ids
-
+    #
+    # def get_project_ids(self):
+    #     ids = None
+    #     with self.runoffdb.get_connection() as dbcon:
+    #         with dbcon.cursor() as thecursor:
+    #             # execute the query and fetch the results
+    #             query = f"SELECT `project_id` FROM `sequence_project` WHERE `sequence_id` = {self.sequence_id}"
+    #
+    #             thecursor.execute(query)
+    #             results = thecursor.fetchall()
+    #             thecursor.close()
+    #
+    #             if len(results)> 0:
+    #                 ids = []
+    #                 for r in results:
+    #                     ids.append(r[0])
+    #     return ids
+    #
 
     def get_terminal_velocity_value(self, time=None, record_type=None):
         found_records = self.get_records([15], 5, record_type_id=record_type)

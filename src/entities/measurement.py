@@ -50,45 +50,6 @@ class Measurement:
             for rec in self.records:
                 rec.show_details(indent)
 
-    def load_records(self):
-        """
-        TODO: THIS METHOD NEEDS TO BE ADJUSTED AFTER THE TARGET-SOURCE BUG IS REPAIRED IN THE DATABASE
-        :return:
-        """
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-                query = f"""
-                    SELECT r.*,
-                           m.`phenomenon_id` AS phenomenon_id,
-                           GROUP_CONCAT(rr.record_target) AS source_ids
-                    FROM {records_table} r
-                    JOIN {measurements_table} m
-                         ON m.`id` = r.`measurement_id`
-                    LEFT JOIN {record_record_table} rr
-                         ON rr.record_source = r.`id`
-                    WHERE r.`measurement_id` = {self.id}
-                    GROUP BY r.`id`
-                """
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results) == 0:
-                    return []
-                else:
-                    rcrds = []
-                    for r in results:
-                        # parse source_ids into a Python list
-                        if r["source_ids"] is None:
-                            r["source_ids"] = []
-                        else:
-                            r["source_ids"] = [int(x) for x in r["source_ids"].split(",") if x]
-
-                        new = Record(self.runoffdb, **r)
-                        rcrds.append(new)
-                    self.records = rcrds
-                    return rcrds
-
     def get_records(self,
                     unit_id=None,
                     record_type_id=None,
@@ -146,7 +107,7 @@ class Measurement:
             return out or None
         else:
             # the records were not loaded yet, try loading them
-            self.records = self.load_records()
+            self.records = self.runoffdb.load_records_of_measurement(self)
             if self.records:
                 return self.get_records(unit_id,
                                         record_type_id,

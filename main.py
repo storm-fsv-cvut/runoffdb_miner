@@ -7,7 +7,7 @@ from src.miner import Miner
 from src.logging.logger import RunLogger
 from src.run_filter import RunFilter
 from src.export.structured_dump import generate_structured_dump
-from src.export.interval_export import generate_interval_values_csv
+from src.export.interval_export import generate_interval_values_csv, generate_intervals_csv_by_simulator
 from datetime import datetime
 
 
@@ -16,23 +16,25 @@ if __name__ == '__main__':
     # lang = "cz"
     lang = "en"
 
-    filter = RunFilter(date_from=datetime.fromisoformat("2018-07-02"),
-                       date_to=datetime.fromisoformat("2018-07-03"),
-                       simulators=None,  # [7, 10],
+    filter_all = RunFilter(date_from=datetime.fromisoformat("1993-01-01"),
+                       date_to=None,
+                       simulators=None,
                        localities=None,
                        crops=None,
                        with_runoff_only=False)
 
-    # filter = RunFilter(date_from=datetime.fromisoformat("2025-01-01"),
-    #                    date_to=datetime.fromisoformat("2025-12-31"),
-    #                    simulators=None,  # [7, 10],
-    #                    localities=None,
-    #                    crops=None,
-    #                    with_runoff_only=False)
+    filter_MDS = RunFilter(date_from=datetime.fromisoformat("2025-01-01"),
+                       date_to=datetime.fromisoformat("2025-12-31"),
+                       simulators=[7, 10],
+                       localities=None,
+                       crops=None,
+                       with_runoff_only=False)
 
-    with Miner(filter) as miner:
+    with Miner(filter_all) as miner:
 
-        generate_interval_values_csv(miner, f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv", lang=lang, no_data_value="")
+        miner.agrotechnologies_overview()
+        # generate_interval_values_csv(miner, f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv", lang=lang, no_data_value="")
+
         # miner.simulators_overview(lang)
         # miner.plots_overview()
         # miner.methodics_overview(lang)
@@ -58,14 +60,10 @@ if __name__ == '__main__':
         #                              no_data_value="NA"
         #                              )
 
-        # miner.generate_intervals_csv_by_simulator(f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}",
-        #                                    lang=lang,
-        #                                    no_data_value="")
-        #
-        # miner.generate_interval_values_csv(f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
-        #                                    lang=lang,
-        #                                    no_data_value="",
-        #                                    log_file=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_log.txt")
+        # generate_intervals_csv_by_simulator(miner,
+        #                                     f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}",
+        #                                     lang=lang,
+        #                                     no_data_value="")
 
         # miner.generate_cumulative_values_csv("d:/Downloads/runoff_sediment_cumulative.csv",
 

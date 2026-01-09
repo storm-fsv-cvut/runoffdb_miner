@@ -90,54 +90,63 @@ class Record:
         print(indent*"\t"+f"\tz: {self.related_value_z_unit_id} - {self.unit_rel_z.name[lang]} [{self.unit_rel_z.unit}]") if self.related_value_z_unit_id else None
         return
 
-    def _load_data(self, value_label, related_x=None, related_y=None, related_z=None, index_column=None, order_by=None):
+    def _load_data(
+            self,
+            value_label,
+            related_x_label=None,
+            related_y_label=None,
+            related_z_label=None,
+            index_column=None,
+            order_by=None,
+    ):
         import pandas as pd
+        from sqlalchemy import text
 
-        more = ""
+        cols = []
+
+        if self.is_timeline:
+            cols.append("`time`")
+
+        cols.append(f"`value` AS {value_label}")
 
         if self.related_value_x_unit_id is not None:
-            more += ", `related_value_x`"
-            if related_x is not None:
-                more += f" AS {related_x} "
-            else:
-                more += f" AS rel_value_x"
+            cols.append(
+                f"`related_value_x` AS {related_x_label or 'rel_value_x'}"
+            )
 
         if self.related_value_y_unit_id is not None:
-            more += ", `related_value_y`"
-            if related_y is not None:
-                more += f" AS {related_y} "
-            else:
-                more += f" AS rel_value_y"
+            cols.append(
+                f"`related_value_y` AS {related_y_label or 'rel_value_y'}"
+            )
 
         if self.related_value_z_unit_id is not None:
-            more += ", `related_value_z`"
-            if related_z is not None:
-                more += f" AS {related_z} "
-            else:
-                more += f" AS rel_value_z"
+            cols.append(
+                f"`related_value_z` AS {related_z_label or 'rel_value_z'}"
+            )
+
+        select_clause = ", ".join(cols)
 
         if order_by is not None:
             order_clause = f" ORDER BY `{order_by}` ASC"
         elif self.is_timeline:
-            order_clause = f" ORDER BY `time` ASC"
+            order_clause = " ORDER BY `time` ASC"
         else:
             order_clause = ""
 
-        select_time = "`time`, " if self.is_timeline else ""
-        query = f"SELECT {select_time}`value` AS {value_label} {more} FROM {data_table} WHERE `record_id` = {self.id}{order_clause}"
+        query = f"SELECT {select_clause} FROM {data_table} WHERE `record_id` = {self.id} {order_clause}"
 
-        with self.runoffdb.get_connection() as dbcon:
-            result_dataFrame = pd.read_sql(query, dbcon)
-            if self.is_timeline and index_column is None:
-                result_dataFrame.set_index('time', inplace=True)
-            elif index_column is not None:
-                result_dataFrame.set_index(index_column, inplace=True)
+        df = pd.read_sql(text(query), self.runoffdb.engine)
 
-            if not result_dataFrame.empty:
-                self.data = result_dataFrame
-            else:
-                raise DataframeEmptyError(value_label, self.id)
-            return result_dataFrame
+        if df.empty:
+            raise DataframeEmptyError(value_label, self.id)
+
+        if self.is_timeline and index_column is None:
+            df.set_index("time", inplace=True)
+        elif index_column is not None:
+            df.set_index(index_column, inplace=True)
+
+        self.data = df
+        return df
 
     def get_data(
             self,
@@ -157,9 +166,9 @@ class Record:
             try:
                 self.data = self._load_data(
                     value_label=value_label,
-                    related_x=related_x,
-                    related_y=related_y,
-                    related_z=related_z,
+                    related_x_label=related_x,
+                    related_y_label=related_y,
+                    related_z_label=related_z,
                     index_column=index_column,
                     order_by=order_by
                 )
@@ -179,44 +188,6 @@ class Record:
             data = remove_last_zero_row(data)
 
         return data
-    #
-    # def get_data_in_unit(self, target_unit_id, value_name="value", related_x="rel_value_x", related_y="rel_value_y", related_z="rel_value_z", index_column=None, remove_last_zero=False, demand_timeline=False, output_column_label=None):
-    #     """
-    #     Return self.data with 'value' multiplied by the unit's multiplier to SI (if there were any data loaded).
-    #     Tries loading the data if self.data is None.
-    #
-    #     :return: pandas Dataframe object with data loaded from DB or None if the self.data is empty, values in SI units
-    #     """
-    #     try:
-    #         self.get_data(value_name, related_x, related_y, related_z,  index_column, remove_last_zero, demand_timeline)
-    #     except DataframeEmptyError:
-    #         raise
-    #
-    #     if self.data is not None:
-    #         # if not self.data.empty:
-    #         if target_unit_id == self.unit_id:
-    #             return self.data
-    #         if target_unit_id is None:
-    #             print(f"Unit ID for data retrieval was not specified - returning in original unit: {self.unit_id} ({self.unit.unit})!")
-    #             return self.data
-    #         output_column_label = output_column_label or value_name
-    #
-    #         multiply_by = multipliers.get(self.unit_id).get(target_unit_id)
-    #         if not multiply_by:
-    #             print(f"Unit id {self.unit_id} doesn't have multiplier defined for conversion to unit id {target_unit_id}!")
-    #             print(multipliers)
-    #             return None
-    #         elif multiply_by != 1:
-    #             if remove_last_zero:
-    #                 data_out = remove_last_zero_row(self.data)
-    #             else:
-    #                 data_out = self.data.copy()
-    #             data_out[output_column_label] = data_out[value_name] * multiply_by
-    #             return data_out
-    #         else:
-    #             return self.data
-    #     else:
-    #         return None
 
     def get_metadata(self, lang="en"):
         meta = {"record ID": self.id,

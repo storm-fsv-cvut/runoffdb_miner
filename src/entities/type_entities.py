@@ -61,25 +61,9 @@ class Plot:
         self.plot_width = kwargs.get("plot_width")
         self.plot_length = kwargs.get("plot_length")
         self.plot_slope = kwargs.get("plot_slope")
-        self.protection_measure_ids, self.protection_measures = self.get_protection_measures()
+        self.protection_measure_ids, self.protection_measures = self.runoffdb.get_protection_measures(self.id)
 
         self.note = {"cz": kwargs.get("note_cz"), "en": kwargs.get("note_en")}
-
-    def get_protection_measures(self):
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-                query = f"SELECT `protection_measure_id` FROM {plot_protection_measures_table} WHERE `plot_id` = {self.id}"
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-
-                ids = []
-                measures = []
-                if thecursor.rowcount > 0:
-                    for r in results:
-                        ids.append(r["protection_measure_id"])
-                        measures.append(self.runoffdb.protection_measures[r["protection_measure_id"]])
-                    thecursor.close()
-            return ids, measures
 
     def get_protection_measures_names(self, lang):
         if self.protection_measures:
@@ -231,35 +215,8 @@ class Crop:
 
 class Agrotechnology:
 
-    operations = None
-
-    @classmethod
-    def load_all_operations(cls, runoffdb):
-        print("\nloading tillage operations to establish agrotechnologies ...")
-        with runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-                # execute the query and fetch the results
-                thecursor.execute(f"SELECT * FROM {operations_table}")
-                results = thecursor.fetchall()
-                thecursor.close()
-                if len(results) > 0:
-                    operations = {}
-                    for r in results:
-                        new = Operation(runoffdb, **r)
-                        operations.update({new.id: new})
-                Agrotechnology.operations = operations
-                print(f"agrotechnical operations loaded ({len(operations)})")
-
-        return operations
-
-
-
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
-
-        # the first Agrotechnology instance induces the agrotechnology DB load of all operations
-        if self.operations is None:
-            Agrotechnology.load_all_operations(runoffdb)
 
         self.id = kwargs.get("id")
         self.name_cz = kwargs.get("name_cz")
@@ -273,26 +230,7 @@ class Agrotechnology:
         self.description = {"cz": self.description_cz, "en": self.description_en}
         self.note = {"cz": self.note_cz, "en": self.note_en}
 
-        self.operation_sequence = self.load_operation_sequence()
-
-    def load_operation_sequence(self):
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-
-                query = f"SELECT `operation_id`, `date` FROM {tillageseq_table} WHERE `agrotechnology_id` = {self.id}"
-                # print(query)
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results) == 0:
-                    print(f"\tno tillage sequence entry found for agrotechnology ID {self.id}")
-                    return {}
-                else:
-                    sequence = {}
-                    for r in results:
-                        sequence.update({r["date"]: Agrotechnology.operations.get(r["operation_id"])})
-                    return sequence
+        self.operation_sequence = self.runoffdb.get_operation_sequence(self.id)
 
     def get_maximum_disturbance_level(self):
         if self.operation_sequence is None or self.operation_sequence == {}:
@@ -303,7 +241,6 @@ class Agrotechnology:
         if self.operation_sequence is None or self.operation_sequence == {}:
             return None
         return max([op.operation_depth_m for op in self.operation_sequence.values()])
-
 
     def is_hay_cut(self):
         for op in self.operation_sequence.values():
@@ -599,79 +536,20 @@ class AssignmentType:
 
 class Method:
 
-    processing_steps = None
-    instruments = None
-
-    @classmethod
-    def load_all_processing_steps(cls, runoffdb):
-        with runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-                # execute the query and fetch the results
-                thecursor.execute(f"SELECT * FROM {processing_step_table}")
-                results = thecursor.fetchall()
-                thecursor.close()
-                if len(results) > 0:
-                    steps = {}
-                    for r in results:
-                        new = ProcessingStep(runoffdb, **r)
-                        steps.update({new.id: new})
-                Method.processing_steps = steps
-            return steps
-
-    @classmethod
-    def load_all_instruments(cls, runoffdb):
-        with runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-                # execute the query and fetch the results
-                thecursor.execute(f"SELECT * FROM {instruments_table}")
-                results = thecursor.fetchall()
-                thecursor.close()
-                if len(results) > 0:
-                    instruments = {}
-                    for r in results:
-                        new = Instrument(runoffdb, **r)
-                        instruments.update({new.id: new})
-                Method.instruments = instruments
-            return instruments
-
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
-
-        # the first Method instance induces the DB load of all processing steps and instruments
-        if self.instruments is None:
-            Method.load_all_instruments(runoffdb)
-        if self.processing_steps is None:
-            Method.load_all_processing_steps(runoffdb)
 
         self.id = kwargs["id"]
         self.name_cz = kwargs["name_cz"]
         self.name_en = kwargs["name_en"]
         self.description_cz = kwargs.get("description_cz")
         self.description_en = kwargs.get("description_en")
-        self.processing_steps_sequence = self.get_processing_steps_sequence() # ordered list of processing steps included in the method
+        self.processing_steps_sequence = self.runoffdb.get_processing_steps_sequence(self.id) # ordered list of processing steps included in the method
         # self.instruments_map = {} # mapping local indexes to instrument class instances
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
-    def get_processing_steps_sequence(self):
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-
-                query = f"SELECT `processing_step_id`, `sort` FROM {methodics_processing_step_table} WHERE `methodics_id` = {self.id}"
-                # print(query)
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results) == 0:
-                    print(f"\tno processing steps found for methodics ID {self.id}")
-                    return []
-                else:
-                    sequence = []
-                    for r in results:
-                        sequence.append(Method.processing_steps.get(r["processing_step_id"]))
-                    return sequence
 
     def show_details(self, lang="en", indent=""):
         print(f"\nMethodics {self.id} - {self.name[lang]}")
@@ -709,25 +587,7 @@ class ProcessingStep:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
-        self.instruments = self.get_instruments()
-
-    def get_instruments(self):
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor(dictionary=True) as thecursor:
-
-                query = f"SELECT `instrument_id` FROM {processing_step_instrument_table} WHERE `processing_step_id` = {self.id}"
-                # print(query)
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results) == 0:
-                    return []
-                else:
-                    instruments = []
-                    for r in results:
-                        instruments.append(Method.instruments.get(r["instrument_id"]))
-                    return instruments
+        self.instruments = self.runoffdb.get_instruments(self.id)
 
     def show_details(self, lang="en", indent=""):
         indent += "\t"
