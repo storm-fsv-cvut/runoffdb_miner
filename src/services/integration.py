@@ -1,12 +1,11 @@
 from .interpolation import get_value_in_time
-
+import pandas as pd
 
 def integrate_by_minutes(df, series_name, start_time = None, end_time = None, zero_time = None, extrapolate = None, interpolate=True):
     return integrate_by_time(df, series_name, start_time, end_time, zero_time, extrapolate, interpolate, 'minutes')
 
 
 def integrate_by_time(df, series_name, start_time=None, end_time=None, zero_time=None, extrapolate=None, interpolate=True, time_unit='minutes'):
-    import pandas as pd
     import numpy as np
 
     # ensure dataframe is timedelta-indexed
@@ -75,58 +74,28 @@ def integrate_by_time(df, series_name, start_time=None, end_time=None, zero_time
 
     return output_value if found_valid_value else np.nan
 
-def integrate_data_series(df, series_name_in, series_name_out, interpolate=True, time_unit='minutes'):
-    """
-    Calculates discreet integral for all points of given 'series_name_in' from dataframe 'df' and stores the values in new series 'series_name_out'
-
-    :param df:
-    :param series_name_in: column name to process
-    :param series_name_out: column name for the output integrated series
-    :param interpolate: whether to interpolate between points in time series, if False stepwise integration is performed (value considered constant in each time interval)
-    :param time_unit: unit of time to use for integration ('minutes', 'hours', 'seconds')
-    :return:
-    """
-
-    import pandas as pd
-
-    # Ensure dataframe is time-indexed
-    if not isinstance(df.index, pd.TimedeltaIndex):
-        print(type(df.index))
-        raise ValueError("DataFrame index must be of type TimedeltaIndex.")
-
-    output_values = []
-
-    for time in df.index:
-        integral_value = integrate_by_time(df, series_name_in,  pd.Timedelta(seconds=0), time, interpolate=interpolate, time_unit=time_unit)
-
-        # Store the integrated value
-        output_values.append(integral_value)
-    # Add the integrated values as a new column to the DataFrame
-    df[series_name_out] = output_values
-
-    return df
-
-import pandas as pd
-
-def integrate_series(df: pd.DataFrame, source_col: str, target_col: str, time_unit: str = "minutes", interpolate: bool = True) -> None:
-    """
-    Integrate source_col to target_col over time.
-    :param df: DataFrame with TimedeltaIndex
-    :param source_col: column to integrate
-    :param target_col: column for cumulative total
-    :param time_unit: 'seconds', 'minutes', 'hours'
-    :param interpolate: if True, linear interpolation used between points
-    """
-    if source_col not in df:
+def integrate_series(
+    df: pd.DataFrame,
+    source_col: str,
+    target_col: str,
+    time_unit: str = "minutes",
+    shift_source: bool = True,
+) -> None:
+    if source_col not in df or df.index.empty:
         df[target_col] = pd.NA
         return
 
-    if df.index.empty:
-        df[target_col] = pd.NA
-        return
-
-    # convert timedelta to chosen time unit
     factor = {"seconds": 1, "minutes": 60, "hours": 3600}[time_unit]
-    delta_seconds = df.index.to_series().diff().dt.total_seconds().fillna(0)
 
-    df[target_col] = (df[source_col] * (delta_seconds / factor)).cumsum()
+    delta_seconds = (
+        df.index.to_series()
+        .diff()
+        .dt.total_seconds()
+        .fillna(0)
+    )
+
+    source = df[source_col]
+    if shift_source:
+        source = source.shift(1).fillna(0)
+
+    df[target_col] = (source * (delta_seconds / factor)).cumsum()

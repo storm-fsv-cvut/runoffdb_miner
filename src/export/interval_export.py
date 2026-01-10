@@ -8,7 +8,7 @@ from src.services.hydro_data import get_best_hydro_data
 from src.export.filesystem import ensure_directory
 from src.run_filter import RunFilter
 
-def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="NA"):
+def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""):
     """
     Schema-driven interval export.
     Logging intentionally omitted.

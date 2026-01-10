@@ -57,7 +57,7 @@ def get_record_data(
     *,
     run,
     record,
-    key,
+    value_label,
     target_unit_id,
     demand_timeline=False
 ):
@@ -65,7 +65,7 @@ def get_record_data(
     Load record data, enforce timeline, convert units if needed.
     """
     df = record.get_data(
-        value_label=key,
+        value_label=value_label,
         demand_timeline=demand_timeline,
     )
 
@@ -77,8 +77,8 @@ def get_record_data(
             df=df,
             source_unit_id=record.unit_id,
             target_unit_id=target_unit_id,
-            value_column=key,
-            output_column=key,
+            value_column=value_label,
+            output_column=value_label,
         )
 
     return df

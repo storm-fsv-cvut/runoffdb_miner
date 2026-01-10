@@ -92,7 +92,7 @@ def get_best_hydro_data(
         if not record.is_timeline:
             continue
 
-        df = _get_record_timeline(run=run, record=record, key=key, target_unit_id=DEFAULT_UNITS.get(key))
+        df = _get_record_timeline(run=run, record=record, value_label=key, target_unit_id=DEFAULT_UNITS.get(key))
         if df.empty and requested[key]:
             missing_requested.append(key)
             continue
@@ -127,16 +127,16 @@ def get_best_hydro_data(
         # check if all sources exist and have at least one non-NA value
         if all(src in merged.columns and merged[src].notna().any() for src in sources):
             if key == "rainfall_total":
-                integrate_series(merged, "rainfall_intensity", "rainfall_total", time_unit="hours")
+                integrate_series(merged, "rainfall_intensity", "rainfall_total", time_unit="hours", shift_source=True)
             elif key == "discharge":
-                integrate_series(merged, "runoff", "discharge", time_unit="minutes")
+                integrate_series(merged, "runoff", "discharge", time_unit="minutes", shift_source=True)
             elif key == "sediment_flux":
-                # fill NaN with 0 only for multiplication
                 merged["sediment_flux"] = (
-                        merged["runoff"].fillna(0) * merged["sediment_concentration"].fillna(0)
+                        merged["runoff"].fillna(0)
+                        * merged["sediment_concentration"].fillna(0)
                 ).replace(0, pd.NA)
             elif key == "sediment_yield":
-                integrate_series(merged, "sediment_flux", "sediment_yield", time_unit="minutes")
+                integrate_series(merged, "sediment_flux", "sediment_yield", time_unit="minutes", shift_source=False)
 
     # rename columns
     merged = merged.rename(columns=labels)
@@ -217,7 +217,7 @@ def get_rainfall_intensity_dataframe(
         df = _get_record_timeline(
             run=run,
             record=record,
-            key=series_label,
+            value_label=series_label,
             target_unit_id=target_unit_id,
         )
     except DataframeEmptyError:
@@ -300,21 +300,20 @@ def get_best_runoff_record(
         phenomenon_id=SURFACE_RUNOFF_PHEN_ID,
         view_order=view_order)
 
-def _get_record_timeline(*, run, record, key, target_unit_id):
+def _get_record_timeline(*, run, record, value_label, target_unit_id):
     """
     Fetches data for a specific record, optionally converts it to target unit, and logs its status.
     :return: DataFrame with the data for the record.
     """
     if target_unit_id and record.unit_id != target_unit_id:
-        return record.get_data_in_unit(
+        return get_record_data(
             target_unit_id=target_unit_id,
-            value_label=key,
-            output_column_label=key,
+            value_label=value_label,
             demand_timeline=True,
         )
 
     return record.get_data(
-        value_label=key,
+        value_label=value_label,
         demand_timeline=True,
     )
 

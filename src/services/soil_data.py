@@ -55,7 +55,7 @@ def get_best_bulk_density_value(
         df = get_record_data(
             run=run,
             record=record,
-            key=label,
+            value_label=label,
             target_unit_id=target_unit_id,
         )
     except DataframeEmptyError:

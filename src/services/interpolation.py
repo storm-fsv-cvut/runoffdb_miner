@@ -16,7 +16,7 @@ def interpolate_dataframe(df: pd.DataFrame, methods: dict[str, Literal["linear",
         if col in result:
             if method == "linear":
                 # convert to numeric safely before linear interpolation
-                result[col] = pd.to_numeric(result[col], errors="coerce").interpolate(method="linear", limit_direction="both")
+                result[col] = pd.to_numeric(result[col], errors="coerce").interpolate(method="linear", limit_direction="forward")
             elif method == "ffill":
                 result[col] = result[col].ffill()
     return result
