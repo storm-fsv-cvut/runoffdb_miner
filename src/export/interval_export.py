@@ -7,8 +7,11 @@ from src.exceptions import RecordSetNotComplete
 from src.services.hydro_data import get_best_hydro_data
 from src.export.filesystem import ensure_directory
 from src.run_filter import RunFilter
+from src.diagnostics.collector import TraceCollector
+from src.diagnostics.trace import DataTrace
+from src.diagnostics.absence_reasons import DataAbsenceReason
 
-def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""):
+def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="", output_trace_path=None):
     """
     Schema-driven interval export.
     Logging intentionally omitted.
@@ -19,6 +22,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
         return
 
     runs = list(miner.runs.values())
+    collector = TraceCollector()
 
     # collect headers
     run_headers = [c.header[lang] for c in RUN_INFO_COLUMNS]
@@ -55,16 +59,46 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
                 request = {k: False for k in labels}
 
                 try:
-                    hydro_data = get_best_hydro_data(
+                    hydro_data, trace = get_best_hydro_data(
                         run=run,
                         request_map=request,
-                        labels_map=labels
+                        labels_map=labels,
+                        return_trace=True,
                     )
-                except RecordSetNotComplete:
+                    if trace:
+                        collector.add(
+                            run_id=run.id,
+                            dataset="hydro_data",
+                            trace=trace,
+                        )
+
+                except RecordSetNotComplete as exc:
+                    collector.add(
+                        run_id=run.id,
+                        dataset="hydro_data",
+                        trace=DataTrace(
+                            reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+                            source="generate_interval_values_csv",
+                            details=str(exc),
+                        ),
+                    )
                     continue
 
                 if hydro_data.empty:
-                    write_row_to_csv(output_csv, run_line + [no_data_value] * len(interval_headers))
+                    collector.add(
+                        run_id=run.id,
+                        dataset="hydro_data",
+                        trace=DataTrace(
+                            reason=DataAbsenceReason.FILTERED_OUT,
+                            source="generate_interval_values_csv",
+                            details="hydro_data dataframe is empty after resolution",
+                        ),
+                    )
+
+                    write_row_to_csv(
+                        output_csv,
+                        run_line + [no_data_value] * len(interval_headers),
+                    )
                     continue
 
                 # ensure fillna is safe for numeric columns
@@ -85,15 +119,30 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
                     state["index"] = index
 
                     # evaluate each interval column once, fallback to no_data_value if None
-                    interval_values = [
-                        (val := col.getter(run, row, ctx, state)) if val is not None else no_data_value
-                        for col in INTERVAL_COLUMNS
-                    ]
+                    interval_values = []
+                    for col in INTERVAL_COLUMNS:
+                        val = col.getter(run, row, ctx, state)
+                        if val is None:
+                            collector.add(
+                                run_id=run.id,
+                                dataset=f"hydro_data: {col.header[lang]} in interval #{state['index']}",
+                                trace=DataTrace(
+                                    reason=DataAbsenceReason.INVALID_VALUES,
+                                    source=col.getter.__name__,
+                                    details=f"interval_index={index}",
+                                ),
+                            )
+                            interval_values.append(no_data_value)
+                        else:
+                            interval_values.append(val)
 
                     write_row_to_csv(output_csv, run_line + interval_values)
 
                     state["prev_index"] = index
                     state["i"] += 1
+        # do something with the collected traces
+        if output_trace_path:
+            collector.dump_json_by_run(output_trace_path)
 
     except PermissionError:
         print(f"\033[91mspecified output file '{output_path}' is being used by another application\033[00m\n")
