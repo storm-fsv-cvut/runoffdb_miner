@@ -3,13 +3,14 @@ import os
 from src.export.schemas.column_sets import RUN_INFO_COLUMNS, INTERVAL_COLUMNS
 from src.utilities.utilities import czech_date
 from src.export.writers import write_row_to_csv
-from src.exceptions import RecordSetNotComplete
 from src.services.hydro_data import get_best_hydro_data
 from src.export.filesystem import ensure_directory
 from src.run_filter import RunFilter
+
 from src.diagnostics.collector import TraceCollector
-from src.diagnostics.trace import DataTrace
+from src.diagnostics.trace import DataTrace, DataIssue
 from src.diagnostics.absence_reasons import DataAbsenceReason
+from src.diagnostics.severity import TraceSeverity
 
 def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="", output_trace_path=None):
     """
@@ -43,8 +44,23 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
                 # run-level values
                 run_line = []
                 for col in RUN_INFO_COLUMNS:
-                    val = col.getter(run, ctx)
-                    run_line.append(val if val is not None else no_data_value)
+                    val, issues = col.getter(run, ctx)
+                    # replace None value with export-specific no_data_value
+                    if val is None:
+                        val = ctx["no_data_value"]
+                    run_line.append(val)
+
+                    if issues is not None:
+                        trace = DataTrace(
+                            issues=issues,
+                            category="run_metadata",
+                            level="run_info_columns",
+                            severity=TraceSeverity.WARNING,
+                        )
+                        collector.add(
+                            run_id=run.id,
+                            dataset="run_info",
+                            trace=trace)
 
                 labels = {
                     "rainfall_intensity": "rainfall_intensity",
@@ -58,47 +74,27 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
 
                 request = {k: False for k in labels}
 
-                try:
-                    hydro_data, trace = get_best_hydro_data(
-                        run=run,
-                        request_map=request,
-                        labels_map=labels,
-                        return_trace=True,
-                    )
-                    if trace:
-                        collector.add(
-                            run_id=run.id,
-                            dataset="hydro_data",
-                            trace=trace,
-                        )
+                hydro_data, trace = get_best_hydro_data(
+                    run=run,
+                    request_map=request,
+                    labels_map=labels,
+                    return_trace=True,
+                )
 
-                except RecordSetNotComplete as exc:
-                    collector.add(
-                        run_id=run.id,
-                        dataset="hydro_data",
-                        trace=DataTrace(
-                            reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
-                            source="generate_interval_values_csv",
-                            details=str(exc),
-                        ),
-                    )
-                    continue
-
+                # write empty line to export if no runoff-sediment data were retrieved
                 if hydro_data.empty:
-                    collector.add(
-                        run_id=run.id,
-                        dataset="hydro_data",
-                        trace=DataTrace(
-                            reason=DataAbsenceReason.FILTERED_OUT,
-                            source="generate_interval_values_csv",
-                            details="hydro_data dataframe is empty after resolution",
-                        ),
-                    )
-
                     write_row_to_csv(
                         output_csv,
                         run_line + [no_data_value] * len(interval_headers),
                     )
+                    # collect the trace if any
+                    if trace:
+                        collector.add(
+                            run_id=run.id,
+                            dataset="runoff_sediment_data",
+                            trace=trace,
+                        )
+
                     continue
 
                 # ensure fillna is safe for numeric columns
@@ -107,12 +103,6 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
 
                 ctx["labels"] = labels
                 state = {"i": 1, "prev_index": None, "index": None}
-
-                print(
-                    f"hydro_data rows={len(hydro_data)}\n"
-                    f"columns={list(hydro_data.columns)}\n"
-                    f"index_type={type(hydro_data.index)}"
-                )
 
                 # interval rows
                 for index, row in hydro_data.iterrows():
@@ -127,10 +117,16 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
                                 run_id=run.id,
                                 dataset=f"hydro_data: {col.header[lang]} in interval #{state['index']}",
                                 trace=DataTrace(
-                                    reason=DataAbsenceReason.INVALID_VALUES,
-                                    source=col.getter.__name__,
-                                    details=f"interval_index={index}",
-                                ),
+                                    issues=(DataIssue(
+                                        reason=DataAbsenceReason.MISSING_DATA,
+                                        source="get_best_hydro_data",
+                                        details=f"missing data within series '{col.header[lang]}'",
+                                        ),
+                                    ),
+                                    category="missing_data",
+                                    level="hydro_sediment_records_derivation",
+                                    severity=TraceSeverity.WARNING,
+                                    ),
                             )
                             interval_values.append(no_data_value)
                         else:
@@ -140,6 +136,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
 
                     state["prev_index"] = index
                     state["i"] += 1
+
         # do something with the collected traces
         if output_trace_path:
             collector.dump_json_by_run(output_trace_path)

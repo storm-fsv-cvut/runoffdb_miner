@@ -8,8 +8,6 @@ import os
 from ..utilities.utilities import czech_date
 from ..utilities.plotters import *
 
-from ..exceptions import RecordSetNotComplete
-
 
 def generate_structured_dump(miner: Miner, root_path, lang="en", no_data_value="NA"):
     import pandas as pd

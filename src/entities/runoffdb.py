@@ -8,23 +8,13 @@ from ..entities.record import Record
 from ..entities.measurement import Measurement
 from ..entities.soil_sample import SoilSample
 from ..entities.type_entities import *
+from ..setup.table_names import *
 import os
 
 from sqlalchemy import text
 from typing import Iterable, Mapping, Any
 
 class RunoffDB:
-
-    # record type priorities
-    default_view_order = [2, 1, 3, 4, 6, 7, 8, 5]
-    # 1 - raw data
-    # 2 - edited data
-    # 3 - homogenized edited data
-    # 4 - homogenized raw data
-    # 5 - set value
-    # 6 - derived data
-    # 7 - estimated from similar conditions
-    # 8 - rough estimate
 
     def __init__(self, output_na_value=None, log_file_path=None):
         print(80*"=")
@@ -112,6 +102,24 @@ class RunoffDB:
 
     def load_runs(self, query: RunFilter) -> dict[int, 'Run']:
 
+        runs: dict[int, Run] = {}
+
+        if query.is_id_only():
+            run_ids = set(as_list(query.run_id))
+
+            # 1. Split cached vs missing
+            runs = {
+                rid: self._run_cache[rid]
+                for rid in run_ids
+                if rid in self._run_cache
+            }
+
+            missing_ids = run_ids - runs.keys()
+            if not missing_ids:
+                return runs
+
+            query = RunFilter(run_id=missing_ids)
+
         simulators = as_list(query.simulators)
         localities = as_list(query.localities)
         crops = as_list(query.crops)
@@ -178,7 +186,6 @@ class RunoffDB:
         results = self.fetch_all(sql)
 
 
-        runs: dict[int, Run] = {}
         for row in results:
             rid = row["run_id"]
             if rid in self._run_cache:
@@ -422,6 +429,24 @@ class RunoffDB:
 
         return ids, measures
 
+
+    def get_last_run_on_plot_datetime(self, plot: Plot):
+        query = f"SELECT max(`datetime`) FROM `run_group` JOIN `run` ON `run`.`run_group_id` = `run_group`.`id` " \
+                f"WHERE `run`.`plot_id` = {plot.id}"
+        result = self.fetch_one(query)
+
+        return result or None
+
+    def get_runs_on_plot(self, plot: Plot):
+        query = f"SELECT `id` FROM `run` WHERE `plot_id` = {plot.id}"
+        results = self.fetch_all(query)
+        if len(results) > 0:
+            run_list = []
+            for res in results:
+                run_list.append(res[0])
+            return run_list
+        return []
+
     def load_units(self):
         results = self.fetch_all(f"SELECT * FROM {units_table}")
         units = {}
@@ -564,6 +589,65 @@ class RunoffDB:
                 new = Record(self, **r)
                 rcrds.append(new)
             return rcrds
+
+    def load_record_data(
+            self,
+            record: Record,
+            *,
+            value_label="value",
+            related_x_label="rel_value_x",
+            related_y_label="rel_value_y",
+            related_z_label="rel_value_z",
+            index_column=None,
+            order_by=None,
+    ):
+        import pandas as pd
+        from sqlalchemy import text
+
+        cols = []
+
+        if record.is_timeline:
+            cols.append("`time`")
+
+        cols.append(f"`value` AS `{value_label}`")
+
+        if record.related_value_x_unit_id is not None:
+            cols.append(f"`related_value_x` AS `{related_x_label}`")
+
+        if record.related_value_y_unit_id is not None:
+            cols.append(f"`related_value_y` AS `{related_y_label}`")
+
+        if record.related_value_z_unit_id is not None:
+            cols.append(f"`related_value_z` AS `{related_z_label}`")
+
+        select_clause = ", ".join(cols)
+
+        if order_by:
+            order_clause = f" ORDER BY `{order_by}` ASC"
+        elif record.is_timeline:
+            order_clause = " ORDER BY `time` ASC"
+        else:
+            order_clause = ""
+
+        sql = f"""
+            SELECT {select_clause}
+            FROM {data_table}
+            WHERE `record_id` = :record_id
+            {order_clause}
+        """
+
+        df = pd.read_sql(
+            text(sql),
+            self.engine,
+            params={"record_id": record.id}
+        )
+
+        if record.is_timeline and index_column is None:
+            df.set_index("time", inplace=True)
+        elif index_column is not None:
+            df.set_index(index_column, inplace=True)
+
+        return df
 
     def get_simulation_days(self, date_from=None, date_to=None):
         """

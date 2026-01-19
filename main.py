@@ -8,6 +8,8 @@ from src.logging.logger import RunLogger
 from src.run_filter import RunFilter
 from src.export.structured_dump import generate_structured_dump
 from src.export.interval_export import generate_interval_values_csv, generate_intervals_csv_by_simulator
+from src.export.slr_calculation import calculate_SLR
+from src.project_structure import project_tree
 from datetime import datetime
 
 
@@ -25,16 +27,24 @@ if __name__ == '__main__':
 
     filter_MDS = RunFilter(date_from=datetime.fromisoformat("2025-01-01"),
                        date_to=datetime.fromisoformat("2025-12-31"),
-                       simulators=[7, 10],
+                       simulators=None, # [7, 10],
                        localities=None,
                        crops=None,
                        with_runoff_only=False)
 
-    with Miner(filter_all) as miner:
+    with Miner(filter_MDS) as miner:
 
-        miner.agrotechnologies_overview()
-        # generate_interval_values_csv(miner, f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv", lang=lang, no_data_value="")
-
+        # miner.agrotechnologies_overview()
+        generate_interval_values_csv(miner,
+                                     f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
+                                     lang=lang,
+                                     no_data_value="",
+                                     output_trace_path=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_trace.json")
+        #
+        # generate_intervals_csv_by_simulator(miner,
+        #                                     f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}",
+        #                                     lang=lang,
+        #                                     no_data_value="")
         # miner.simulators_overview(lang)
         # miner.plots_overview()
         # miner.methodics_overview(lang)
@@ -43,7 +53,7 @@ if __name__ == '__main__':
         # miner.compare_discharge_calculation_methods(output_dir=f"d:/Downloads/discharge_calculation_comparison",
         #                                             log_file=f"d:/Downloads/discharge_calculation_comparison/_log_{datetime.now().strftime('%Y%m%d')}.txt")
 
-        # miner.calculate_SLR(output_dir=f"d:/Downloads/SLR_{datetime.now().strftime('%Y%m%d')}_step",
+        # calculate_SLR(miner, output_dir=f"d:/Downloads/SLR_{datetime.now().strftime('%Y%m%d')}_step",
         #                     interpolate=False, lang="cz")
 
         # miner.find_fallow()
@@ -60,10 +70,7 @@ if __name__ == '__main__':
         #                              no_data_value="NA"
         #                              )
 
-        # generate_intervals_csv_by_simulator(miner,
-        #                                     f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}",
-        #                                     lang=lang,
-        #                                     no_data_value="")
+
 
         # miner.generate_cumulative_values_csv("d:/Downloads/runoff_sediment_cumulative.csv",
 
@@ -77,10 +84,12 @@ if __name__ == '__main__':
 
 
         # miner.generate_euro_table("d:/Downloads/euro_export.csv")
+        pass
 
     duration = datetime.now() - start_time
     print(f"{80*'_'}\nfinished at {datetime.now().strftime('%H:%M:%S')}")
     print(f"total processing time {duration}")
 
-
+    print(f"\n\nProject structure\n--------------------")
+    project_tree("D:/Dokumenty/RUNOFFDB/runoffdb_miner", files_only=True)
 

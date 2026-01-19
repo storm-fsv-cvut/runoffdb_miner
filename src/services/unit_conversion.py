@@ -1,7 +1,6 @@
 import pandas as pd
 from ..setup.unit_ids import UNITS_CONVERSION
 
-
 class UnitConversionError(Exception):
     pass
 
@@ -24,7 +23,7 @@ def convert_dataframe_units(
         multiplier = UNITS_CONVERSION[source_unit_id][target_unit_id]
     except KeyError:
         raise UnitConversionError(
-            f"No conversion defined from unit {source_unit_id} to {target_unit_id}"
+            f"no conversion defined from unit {source_unit_id} to {target_unit_id}"
         )
 
     out = df.copy()

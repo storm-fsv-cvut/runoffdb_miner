@@ -15,7 +15,6 @@ from .entities.runoffdb import RunoffDB
 from .entities.run import Run
 from .utilities.plotters import *
 from .setup.unit_ids import *
-from .exceptions import RecordSetNotComplete
 from .run_filter import RunFilter
 from .logging.logger import *
 

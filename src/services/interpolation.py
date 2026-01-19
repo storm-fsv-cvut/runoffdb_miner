@@ -1,30 +1,67 @@
 from ..exceptions import RequestedTimeDeltaValueMissing
 
+from src.diagnostics.trace import DataTrace, DataIssue
+from src.diagnostics.absence_reasons import DataAbsenceReason
+
 import pandas as pd
 from typing import Literal
 
-
-def interpolate_dataframe(df: pd.DataFrame, methods: dict[str, Literal["linear", "ffill"]]) -> pd.DataFrame:
+def interpolate_dataframe(
+    df: pd.DataFrame,
+    methods: dict[str, Literal["linear", "ffill"]],
+    *,
+    return_trace: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, list["DataIssue"]]:
     """
     Interpolate DataFrame columns according to methods.
-    :param df: input DataFrame with TimedeltaIndex
-    :param methods: dict[column_name] -> interpolation method
-    :return: interpolated DataFrame
+
+    Returns:
+    - DataFrame
+    - (DataFrame, [DataTrace]) if return_traces=True
     """
+
+    import pandas as pd
+
     result = df.copy()
+    issues: dict[str: DataIssue] = {}
+
     for col, method in methods.items():
-        if col in result:
-            if method == "linear":
-                # convert to numeric safely before linear interpolation
-                result[col] = pd.to_numeric(result[col], errors="coerce").interpolate(method="linear", limit_direction="forward")
-            elif method == "ffill":
-                result[col] = result[col].ffill()
-    return result
+        if col not in result:
+            continue
+
+        before_non_na = result[col].notna().sum()
+
+        if method == "linear":
+            result[col] = (
+                pd.to_numeric(result[col], errors="coerce")
+                .interpolate(method="linear", limit_direction="forward")
+            )
+        elif method == "ffill":
+            result[col] = result[col].ffill()
+
+        after_non_na = result[col].notna().sum()
+
+        # destructive interpolation (should be rare but critical)
+        if before_non_na > 0 and after_non_na == 0:
+            issues.update({col: DataIssue(
+                                reason=DataAbsenceReason.INTERPOLATION_FAILED,
+                                source="interpolate_dataframe",
+                                details=f"column '{col}' lost all values during interpolation",
+                                )
+                            }
+                        )
+
+    return (result, issues) if return_trace else result
 
 
 def get_value_in_time(
-    df: pd.DataFrame, timedelta, series_name, zero_time=None,
-    interpolate=True, extrapolate=None, fallback="previous"
+        df: pd.DataFrame,
+        timedelta,
+        series_name,
+        zero_time=None,
+        interpolate=True, extrapolate=None, fallback="previous",
+        *,
+        return_trace: bool = False
 ):
     """
     Returns interpolated or extrapolated value of data series at the specified timedelta.
@@ -47,72 +84,102 @@ def get_value_in_time(
     # ensure dataframe is time-indexed
     if not isinstance(df.index, pd.TimedeltaIndex):
         raise ValueError("DataFrame index must be of type TimedeltaIndex.")
+    trace = None
+
+    # ensure dataframe is time-indexed
+    if not isinstance(df.index, pd.TimedeltaIndex):
+        raise ValueError("DataFrame index must be of type TimedeltaIndex.")
 
     try:
         first_time = df.index[0]
         last_time = df.index[-1]
     except IndexError:
-        return None
+        trace = DataTrace(
+            reason=DataAbsenceReason.INTERPOLATION_NO_DATA,
+            source="get_value_in_time",
+            details=f"data series '{series_name}' is empty",
+        )
+        return (None, trace) if return_trace else None
 
     # exact match
     if timedelta in df.index:
-        return df.loc[timedelta, series_name]
+        return (df.loc[timedelta, series_name], None) if return_trace else df.loc[timedelta, series_name]
 
     # before first value
     if timedelta < first_time:
         if zero_time:
-            # print(" - extrapolating to zero\n")
-            return (df.loc[first_time, series_name] / (first_time - zero_time).total_seconds()) * \
-                   (timedelta - zero_time).total_seconds()
+            v = (df.loc[first_time, series_name] / (first_time - zero_time).total_seconds()) * \
+                (timedelta - zero_time).total_seconds()
+            return (v, None) if return_trace else v
         else:
-            print(f"Requested time is before the first record in '{series_name}' and extrapolation to zero was not requested.\n")
-            return None
+            trace = DataTrace(
+                reason=DataAbsenceReason.BEFORE_FIRST_VALUE,
+                source="get_value_in_time",
+                details=f"timedelta {timedelta} before first value in '{series_name}'",
+            )
+            return (None, trace) if return_trace else None
 
     # after last value
-    elif timedelta > last_time:
+    if timedelta > last_time:
         if extrapolate:
             if df[series_name].size > 1:
-                # returns last recorded value
-                if extrapolate == -1:
-                    return df.iloc[-1][series_name]
-                # check duration of last step
-                last_step_duration = df.index[-1] - df.index[-2]
-                if (timedelta - df.index[-1]) < extrapolate * last_step_duration:
-                    # print(" - extrapolating after series end\n")
-                    v1, v2 = df.iloc[-2][series_name], df.iloc[-1][series_name]
-                    t1, t2 = df.index[-2], df.index[-1]
-                    return v2 + (timedelta - t2).total_seconds() * ((v2 - v1) / (t2 - t1).total_seconds())
-            else:
-                print(f"Data series '{series_name}' doesn't have enough values for extrapolation.\n")
-                return None
+                v1, v2 = df.iloc[-2][series_name], df.iloc[-1][series_name]
+                t1, t2 = df.index[-2], df.index[-1]
+                if (timedelta - t2) < extrapolate * (t2 - t1):
+                    v = v2 + (timedelta - t2).total_seconds() * ((v2 - v1) / (t2 - t1).total_seconds())
+                    return (v, None) if return_trace else v
+                elif extrapolate == -1:
+                    return (df.iloc[-1][series_name], None) if return_trace else df.iloc[-1][series_name]
+            trace = DataTrace(
+                reason=DataAbsenceReason.EXTRAPOLATION_FAILED,
+                source="get_value_in_time",
+                details=f"not enough data to extrapolate '{series_name}' at {timedelta}",
+            )
+            return (None, trace) if return_trace else None
         else:
+            from ..exceptions import RequestedTimeDeltaValueMissing
             raise RequestedTimeDeltaValueMissing(
                 series_name, timedelta,
-                f"Requested timedelta is after last record in the data series and extrapolation was not requested.\n"
+                f"Requested timedelta after last record in '{series_name}' and extrapolation not allowed."
             )
 
     # within series range
     if interpolate:
-        # linear interpolation
         df_with_requested_time = df.reindex(df.index.union([timedelta]))
         interpolated_series = df_with_requested_time[series_name].interpolate(method='time')
-        return interpolated_series.loc[timedelta]
+        value = interpolated_series.loc[timedelta]
+        if pd.isna(value):
+            trace = DataTrace(
+                reason=DataAbsenceReason.INTERPOLATION_NO_DATA,
+                source="get_value_in_time",
+                details=f"interpolation failed for '{series_name}' at {timedelta}",
+            )
+        return (value, trace) if return_trace else value
 
     # fallback behavior when interpolate=False
     prev_times = df.index[df.index < timedelta]
     if prev_times.empty:
-        print(f"No earlier values found in '{series_name}' for the requested timedelta.\n")
-        return None
+        trace = DataTrace(
+            reason=DataAbsenceReason.INTERPOLATION_NO_DATA,
+            source="get_value_in_time",
+            details=f"No earlier values found in '{series_name}' for {timedelta}",
+        )
+        return (None, trace) if return_trace else None
 
     if fallback == "previous":
         last_valid_time = prev_times[-1]
-        # print(f" - using previous value from {last_valid_time}\n")
-        return df.loc[last_valid_time, series_name]
+        value = df.loc[last_valid_time, series_name]
+        return (value, None) if return_trace else value
     elif fallback == "error":
+        from ..exceptions import RequestedTimeDeltaValueMissing
         raise RequestedTimeDeltaValueMissing(
             series_name, timedelta,
-            f"Requested timedelta is between index values of data series and interpolation was not requested.\n"
+            f"Requested timedelta is between index values and interpolation disabled."
         )
     else:
-        # print(f"Interpolation disabled and fallback=None — returning None for '{series_name}'.\n")
-        return None
+        trace = DataTrace(
+            reason=DataAbsenceReason.INTERPOLATION_NO_DATA,
+            source="get_value_in_time",
+            details=f"fallback=None returned None for '{series_name}' at {timedelta}",
+        )
+        return (None, trace) if return_trace else None

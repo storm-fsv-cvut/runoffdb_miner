@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from ..setup.entity_ids import *
-from ..setup.table_names import *
 from ..utilities.utilities import *
+from ..diagnostics.trace import *
 
 from datetime import date, datetime
 
@@ -65,70 +65,74 @@ class Plot:
 
         self.note = {"cz": kwargs.get("note_cz"), "en": kwargs.get("note_en")}
 
-    def get_protection_measures_names(self, lang):
+    def get_protection_measures_names(self, lang, return_trace: bool = False):
+        issues = []
         if self.protection_measures:
             outlist = []
             for m in self.protection_measures:
-                # if the protection measure name is missing in requested language it must be resolved
                 if m.name[lang] is not None:
                     outlist.append(m.name[lang])
+                    # if the protection measure name is missing in requested language it must be resolved
                 else:
-                    outlist.append(f"*protection measure ID {m.id} is missing name in '{lang}'*")
-            return ", ".join([msr for msr in outlist])
-        return None
+                    outlist.append(f"missing name in '{lang}'")
+                    issues.append(DataIssue(
+                                reason=DataAbsenceReason.MISSING_PROPERTY_TRANSLATION,
+                                source="Plot.get_protection_measures_names",
+                                details=f"protection measure ID {m.id} is missing name in language '{lang}'",
+                            ))
+            outstr = ", ".join([msr for msr in outlist])
+            return (outstr, tuple(issues)) if return_trace else outstr
 
-    def get_last_run_datetime(self):
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor() as thecursor:
-                query = f"SELECT max(`datetime`) FROM `run_group` JOIN `run` ON `run`.`run_group_id` = `run_group`.`id` " \
-                        f"WHERE `run`.`plot_id` = {self.id}"
-                # execute the query and fetch the results
-                thecursor.execute(query)
-                results = thecursor.fetchone()
-                thecursor.close()
+        return (None, None) if return_trace else None
 
-                if len(results) > 0:
-                    return results[0]
+    def days_since_seeding(self, datetime: datetime, main_crop_only: bool = False, return_trace: bool = False):
+        """
 
-            return None
-
-    def days_since_seeding(self, datetime, main_crop_only=False):
-        # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
+        :param datetime:
+        :param main_crop_only:
+        :param return_trace:
+        :return:
+        """
+        # for the cultivated fallow always return None
         if self.crop_id == CULTIVATED_FALLOW_CROP_ID:
-            return None
+            issue = (DataIssue(
+                reason=DataAbsenceReason.INVALID_REQUEST,
+                source="get_days_since_seeding",
+                details=f"days since seeding irrelevant for 'cultivated fallow'",
+            ), )
+            return (None, issue) if return_trace else None
+
         else:
             if self.agrotechnology is not None:
-                return self.agrotechnology.days_since_seeding(datetime, main_crop_only=main_crop_only)
+                days = self.agrotechnology.days_since_seeding(datetime, main_crop_only=main_crop_only)
+                return (days, None) if return_trace else days
             else:
-                print(f"\tplot {self.id} has no agrotechnology assigned")
-                return None
+                issue = (DataIssue(
+                    reason=DataAbsenceReason.MISSING_ENTITY_PROPERTY,
+                    source="get_days_since_seeding",
+                    details=f"plot ID {self.id} doesn't have agrotechnology assigned",
+                ), )
+                return (None, issue) if return_trace else None
 
-    def days_since_last_operation(self):
+    def days_since_last_operation(self, return_trace: bool = False):
         # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
         if self.crop_id == CULTIVATED_FALLOW_CROP_ID:
-            return 0
+            issue = DataIssue(
+                reason=DataAbsenceReason.IMPLICIT_VALUE,
+                source="days_since_last_operation",
+                details=f"days since last operation implicitly assumed = 0 for 'cultivated fallow'",
+            )
+            return (None, issue) if return_trace else None
         else:
             if self.agrotechnology is not None:
                 return self.agrotechnology.days_since_last_operation(date)
             else:
-                print(f"\tplot {self.id} has no agrotechnology assigned")
-                return None
-
-    def get_runs_on_plot(self):
-        with self.runoffdb.get_connection() as dbcon:
-            with dbcon.cursor() as thecursor:
-                query = f"SELECT `id` FROM `run` WHERE `plot_id` = {self.id}"
-                # execute the query and fetch the results
-                thecursor.execute(query)
-                results = thecursor.fetchall()
-                thecursor.close()
-
-                if len(results) > 0:
-                    run_list = []
-                    for res in results:
-                        run_list.append(res[0])
-                    return run_list
-            return []
+                issue = DataIssue(
+                    reason=DataAbsenceReason.MISSING_ENTITY_PROPERTY,
+                    source="days_since_last_operation",
+                    details=f"plot ID {self.id} doesn't have agrotechnology assigned",
+                )
+                return (None, issue) if return_trace else None
 
     def get_metadata(self, lang="en"):
         meta = {"plot ID": self.id,
@@ -156,7 +160,7 @@ class Plot:
             print(f"\t\t{measure.id} - {measure.name['cz']}")
         return
 
-    def get_note(self, lang="en", remove=None, no_data_value=None):
+    def get_note(self, lang="en", remove=None):
         """
         Return the note for the given language, with characters replaced
         according to the `remove` mapping. Handles \n, \r\n, \\n safely.
@@ -164,7 +168,7 @@ class Plot:
         note = self.note.get(lang)
 
         if not note:  # None or empty string
-            return no_data_value
+            return None
 
         # Default forbidden characters
         default_remove = {

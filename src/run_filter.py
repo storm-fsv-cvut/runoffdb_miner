@@ -46,3 +46,15 @@ class RunFilter:
             return False
 
         return True
+
+    def is_id_only(self) -> bool:
+        return (
+            self.run_id is not None and
+            self.date_from is None and
+            self.date_to is None and
+            self.simulators is None and
+            self.localities is None and
+            self.crops is None and
+            not self.with_runoff_only and
+            self.limit is None
+        )

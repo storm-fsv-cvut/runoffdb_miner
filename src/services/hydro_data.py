@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional
+from dataclasses import dataclass
 
-from src.setup.unit_ids import *
 from src.services.interpolation import *
 
 from src.services.interpolation import interpolate_dataframe
 from src.services.integration import integrate_series
 from src.services.record_resolution import *
 
-from src.exceptions import RecordSetNotComplete, DataframeEmptyError, DataframeNotTimeIndexed
+from src.diagnostics.trace import DataTrace, DataIssue
+from src.diagnostics.absence_reasons import DataAbsenceReason
+from src.diagnostics.severity import TraceSeverity
+
 from src.entities.run import Run
 
 # defaults
@@ -38,20 +41,276 @@ DEFAULT_INTERPOLATIONS = {
     "sediment_flux": "linear",
 }
 
+# dependency relations
+DEFAULT_DEPENDENCIES = {
+    "rainfall_intensity": [{"record": "rainfall_intensity"}],
+    "rainfall_total": [{"derived_from": ["rainfall_intensity"]}],
+    "runoff": [{"record": "runoff"}],
+    "sediment_concentration": [{"record": "sediment_concentration"}],
+    "discharge": [{"derived_from": ["runoff"]}],
+    "sediment_flux": [
+        {"record": "sediment_flux"},
+        {"derived_from": ["runoff", "sediment_concentration"]},
+    ],
+    "sediment_yield": [{"derived_from": ["sediment_flux"]}],
+}
+
+@dataclass(frozen=True)
+class RecordDep:
+    key: str
+    record: object | None
+    kind: str = "record"
+
+@dataclass(frozen=True)
+class DerivedDep:
+    key: str
+    sources: tuple[str, ...]
+    kind: str = "derived"
+
+# def get_best_hydro_data(
+#     *,
+#     run: "Run",
+#     labels_map: Optional[Dict[str, str]] = None,
+#     request_map: Optional[Dict[str, bool]] = None,
+#     interpolation_map: Optional[Dict[str, str]] = None,
+#     return_trace: bool = False,
+# ) -> pd.DataFrame | tuple[pd.DataFrame, "DataTrace | None"]:
+#     """
+#     Assemble hydrological data for a run into a single Timedelta-indexed DataFrame.
+#
+#     Semantics of TraceSeverity:
+#     - if any request_map[key] == True -> must exist -> ERROR
+#     - all request_map values False -> export whatever exists -> WARNING/INFO
+#     """
+#     labels_map = labels_map or {}
+#     request_map = request_map or {}
+#     interpolation_map = interpolation_map or {}
+#
+#     labels = {k: labels_map.get(k, v) for k, v in DEFAULT_LABELS.items()}
+#     requested = {k: request_map.get(k, False) for k in DEFAULT_LABELS}
+#     interpolations = {k: interpolation_map.get(k, v) for k, v in DEFAULT_INTERPOLATIONS.items()}
+#
+#     trace: DataTrace | None = None
+#     trace_severity = TraceSeverity.INFO
+#     issues: list[DataIssue] = []
+#
+#     # --- resolve present records ---
+#     present_records, derived_sources = _resolve_present_records(
+#         run=run,
+#         dependencies=DEFAULT_DEPENDENCIES,
+#     )
+#
+#     dataframes: List[pd.DataFrame] = []
+#     missing_requested: List[str] = []
+#
+#
+#     # --- load timelines with explicit tracing ---
+#     for key, record in present_records.items():
+#
+#         # 1. record missing entirely
+#         if record is None:
+#             issues.append(DataIssue(
+#                             reason=DataAbsenceReason.NO_RECORD,
+#                             source="get_best_hydro_data",
+#                             details=f"record '{key}' not present",
+#                             )
+#                         )
+#             if requested.get(key):
+#                 missing_requested.append(key)
+#                 trace_severity = TraceSeverity.ERROR
+#
+#             continue
+#
+#         # 2. record exists but is not a timeline
+#         if not record.is_timeline:
+#             issues.append(DataIssue(
+#                     reason=DataAbsenceReason.INVALID_RECORD_TYPE,
+#                     source="get_best_hydro_data",
+#                     details=f"record ID {record.id} (requested as '{key}') is not timeline type",
+#                     ))
+#             if return_trace:
+#                 if requested.get(key):
+#                     trace_severity = TraceSeverity.ERROR
+#
+#             continue
+#
+#         # 3. attempt to load record timeline
+#         df, sub_issues = get_record_data(
+#             run=run,
+#             record=record,
+#             value_label=key,
+#             target_unit_id=DEFAULT_UNITS.get(key),
+#             return_trace=True,
+#         )
+#
+#         # 4. timeline loaded but empty
+#         if df.empty:
+#             if return_trace:
+#                 issues.append(DataIssue(
+#                         reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+#                         source="get_best_hydro_data",
+#                         details=f"record ID {record.id} (requested as '{key}') has no data",
+#                         causes=sub_issues
+#                         )
+#                     )
+#
+#             if requested.get(key):
+#                 missing_requested.append(key)
+#                 trace_severity = TraceSeverity.ERROR
+#             continue
+#
+#         # 5. timeline exists and has data
+#         dataframes.append(df)
+#
+#     # --- handle no usable records at all ---
+#     if not dataframes:
+#         if return_trace and trace is None:
+#             if len(missing_requested) > 0:
+#                 trace_severity = TraceSeverity.ERROR
+#             else:
+#                 trace_severity = TraceSeverity.INFO
+#
+#             issue = (DataIssue(
+#                 reason=DataAbsenceReason.NO_RECORD,
+#                 source="get_best_hydro_data",
+#                 details=f"no usable hydro/sediment data acquired",
+#                 causes=tuple(issues)
+#                 ),)
+#
+#             trace = DataTrace(
+#                             issues=issue,
+#                             category="missing_records",
+#                             level="hydro_sediment_record_set",
+#                             severity=trace_severity,
+#                             )
+#
+#         empty = pd.DataFrame(columns=list(labels.values()))
+#         return (empty, trace) if return_trace else empty
+#
+#     # --- merge timelines ---
+#     merged = pd.concat(dataframes, axis=1, join="outer")
+#     merged.index = pd.to_timedelta(merged.index)
+#     merged.sort_index(inplace=True)
+#
+#     # ensure all keys exist
+#     for key in DEFAULT_LABELS:
+#         if key not in merged:
+#             merged[key] = pd.NA
+#
+#     # --- interpolate ---
+#     merged, interp_issues = interpolate_dataframe(
+#         merged,
+#         interpolations,
+#         return_trace=True,
+#     )
+#
+#     interpolation_issues = []
+#     for key, iss in interp_issues.items():
+#         if requested.get(key):
+#             trace_severity = TraceSeverity.ERROR
+#         else:
+#             trace_severity = TraceSeverity.WARNING
+#
+#         interpolation_issues.append(DataIssue(
+#                 reason=DataAbsenceReason.INTERPOLATION_FAILED,
+#                 source="get_best_hydro_data",
+#                 details=f"'{key}' value timeline corrupted during interpolation",
+#                 causes=tuple(iss)
+#                 ))
+#
+#         trace = DataTrace(
+#                         issues=iss,
+#                         category="interpolation_failed",
+#                         level="hydro_sediment_record_set",
+#                         severity=trace_severity,
+#                         )
+#
+#     # --- derived quantities ---
+#     for key, sources in derived_sources.items():
+#         if not all(src in merged.columns and merged[src].notna().any() for src in sources):
+#             if return_trace:
+#                 if requested.get(key):
+#                     severity = TraceSeverity.ERROR
+#                 else:
+#                     severity = TraceSeverity.INFO
+#                 trace = DataTrace(
+#                     issues=(DataIssue(
+#                         reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+#                         source="get_best_hydro_data",
+#                         details=f"missing sources for required derived field '{key}'",
+#                         ),
+#                     ),
+#                     category="missing_data",
+#                     level="hydro_sediment_records_derivation",
+#                     severity=severity,
+#                 )
+#             continue
+#
+#         # compute derived fields
+#         if key == "rainfall_total":
+#             integrate_series(
+#                 merged,
+#                 "rainfall_intensity",
+#                 "rainfall_total",
+#                 time_unit="hours",
+#                 shift_source=True,
+#             )
+#         elif key == "discharge":
+#             integrate_series(
+#                 merged,
+#                 "runoff",
+#                 "discharge",
+#                 time_unit="minutes",
+#                 shift_source=True,
+#             )
+#         elif key == "sediment_flux":
+#             merged["sediment_flux"] = (
+#                 merged["runoff"].fillna(0)
+#                 * merged["sediment_concentration"].fillna(0)
+#             ).replace(0, pd.NA)
+#
+#         elif key == "sediment_yield":
+#             integrate_series(
+#                 merged,
+#                 "sediment_flux",
+#                 "sediment_yield",
+#                 time_unit="minutes",
+#                 shift_source=True,
+#             )
+#
+#     # --- final check for completely NA result ---
+#     if merged.notna().sum().sum() == 0 and return_trace:
+#         trace = DataTrace(
+#                         issues=(DataIssue(
+#                             reason=DataAbsenceReason.INVALID_VALUES,
+#                             source="get_best_hydro_data",
+#                             details="result dataframe contains only NA values",
+#                             causes=tuple(issues)
+#                             ),),
+#                         category="invalid_data",
+#                         level="hydro_sediment_records_set",
+#                         severity=trace_severity,
+#                         )
+#
+#     # rename columns
+#     merged = merged.rename(columns=labels)
+#
+#     return (merged, trace) if return_trace else merged
 
 def get_best_hydro_data(
-        *,
-        run: "Run",
-        labels_map: Optional[Dict[str, str]] = None,
-        request_map: Optional[Dict[str, bool]] = None,
-        interpolation_map: Optional[Dict[str, str]] = None,
-) -> pd.DataFrame:
+    *,
+    run: "Run",
+    labels_map: Optional[Dict[str, str]] = None,
+    request_map: Optional[Dict[str, bool]] = None,
+    interpolation_map: Optional[Dict[str, str]] = None,
+    return_trace: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, "DataTrace | None"]:
     """
     Assemble hydrological data for a run into a single Timedelta-indexed DataFrame.
 
     Semantics:
-    - request_map[key] == True -> must exist, else raise RecordSetNotComplete
-    - all request_map values False -> export whatever exists
+    - empty DataFrame == function succeeded, no usable data
+    - None is never returned
     """
 
     labels_map = labels_map or {}
@@ -59,117 +318,345 @@ def get_best_hydro_data(
     interpolation_map = interpolation_map or {}
 
     labels = {k: labels_map.get(k, v) for k, v in DEFAULT_LABELS.items()}
-    requested = {k: request_map.get(k, False) for k in DEFAULT_LABELS}
+    required = {k: request_map.get(k, False) for k in DEFAULT_LABELS}
     interpolations = {k: interpolation_map.get(k, v) for k, v in DEFAULT_INTERPOLATIONS.items()}
 
-    # dependency graph
-    dependencies = {
-        "rainfall_intensity": [{"record": "rainfall_intensity"}],
-        "rainfall_total": [{"derived_from": ["rainfall_intensity"]}],
-        "runoff": [{"record": "runoff"}],
-        "sediment_concentration": [{"record": "sediment_concentration"}],
-        "discharge": [{"derived_from": ["runoff"]}],
-        "sediment_flux": [
-            {"record": "sediment_flux"},
-            {"derived_from": ["runoff", "sediment_concentration"]},
-        ],
-        "sediment_yield": [{"derived_from": ["sediment_flux"]}],
-    }
+    issues: list[DataIssue] = []
+    trace_severity = TraceSeverity.INFO
+    trace: DataTrace | None = None
 
-    # resolve present records
-    present_records, derived_sources = _resolve_present_records(run=run, dependencies=dependencies)
+    # ------------------------------------------------------------------
+    # Resolve dependencies (role-aware)
+    # ------------------------------------------------------------------
+    resolved = _resolve_present_records(
+        run=run,
+        dependencies=DEFAULT_DEPENDENCIES,
+    )
 
-    # collect timelines
-    dataframes: List[pd.DataFrame] = []
-    missing_requested: List[str] = []
+    dataframes: list[pd.DataFrame] = []
 
-    for key, record in present_records.items():
+    # ------------------------------------------------------------------
+    # 1. Load DIRECT RECORD timelines only
+    # ------------------------------------------------------------------
+    for key, deps in resolved.items():
+        record_dep = deps["record"]
+        if record_dep is None:
+            continue
+
+        record = record_dep.record
+
+        # 1a. direct record missing
         if record is None:
-            if requested[key]:
-                missing_requested.append(key)
+            issues.append(DataIssue(
+                reason=DataAbsenceReason.NO_RECORD,
+                source="get_best_hydro_data",
+                details=f"requested record '{key}' not present",
+            ))
+            if required.get(key):
+                trace_severity = TraceSeverity.ERROR
             continue
 
+        # 1b. invalid record type
         if not record.is_timeline:
+            issues.append(DataIssue(
+                reason=DataAbsenceReason.INVALID_RECORD_TYPE,
+                source="get_best_hydro_data",
+                details=f"record ID {record.id} (requested as '{key}') is not timeline type",
+            ))
+            if required.get(key):
+                trace_severity = TraceSeverity.ERROR
             continue
 
-        df = _get_record_timeline(run=run, record=record, value_label=key, target_unit_id=DEFAULT_UNITS.get(key))
-        if df.empty and requested[key]:
-            missing_requested.append(key)
-            continue
-
-        if not df.empty:
-            dataframes.append(df)
-
-    if missing_requested:
-        raise RecordSetNotComplete(
-            [k for k, v in requested.items() if v],
-            missing_requested,
+        # 1c. load timeline
+        df, sub_issues = get_record_data(
+            run=run,
+            record=record,
+            value_label=key,
+            target_unit_id=DEFAULT_UNITS.get(key),
+            return_trace=True,
         )
 
-    if not dataframes:
-        return pd.DataFrame(columns=list(labels.values()))
+        # 1d. empty timeline
+        if df.empty:
+            issues.append(DataIssue(
+                reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+                source="get_best_hydro_data",
+                details=f"record ID {record.id} ('{key}') has no data",
+                causes=sub_issues,
+            ))
+            if required.get(key):
+                trace_severity = TraceSeverity.ERROR
+            continue
 
-    # --- merge timelines ---
+        dataframes.append(df)
+
+    # ------------------------------------------------------------------
+    # 2. No usable direct records at all
+    # ------------------------------------------------------------------
+    if not dataframes:
+        if return_trace:
+            trace = DataTrace(
+                issues=(DataIssue(
+                    reason=DataAbsenceReason.NO_RECORD,
+                    source="get_best_hydro_data",
+                    details="no usable hydro/sediment records acquired",
+                    causes=tuple(issues),
+                ),),
+                category="missing_records",
+                level="hydro_sediment_record_set",
+                severity=trace_severity,
+            )
+
+        empty = pd.DataFrame(columns=list(labels.values()))
+        return (empty, trace) if return_trace else empty
+
+    # ------------------------------------------------------------------
+    # 3. Merge timelines
+    # ------------------------------------------------------------------
     merged = pd.concat(dataframes, axis=1, join="outer")
     merged.index = pd.to_timedelta(merged.index)
     merged.sort_index(inplace=True)
 
-    # ensure all keys exist
     for key in DEFAULT_LABELS:
         if key not in merged:
             merged[key] = pd.NA
 
-    # --- interpolate ---
-    merged = interpolate_dataframe(merged, interpolations)
+    # ------------------------------------------------------------------
+    # 4. Interpolation
+    # ------------------------------------------------------------------
+    merged, interp_issues = interpolate_dataframe(
+        merged,
+        interpolations,
+        return_trace=True,
+    )
 
-    # --- derived quantities ---
-    for key, sources in derived_sources.items():
-        # check if all sources exist and have at least one non-NA value
-        if all(src in merged.columns and merged[src].notna().any() for src in sources):
-            if key == "rainfall_total":
-                integrate_series(merged, "rainfall_intensity", "rainfall_total", time_unit="hours", shift_source=True)
-            elif key == "discharge":
-                integrate_series(merged, "runoff", "discharge", time_unit="minutes", shift_source=True)
-            elif key == "sediment_flux":
-                merged["sediment_flux"] = (
-                        merged["runoff"].fillna(0)
-                        * merged["sediment_concentration"].fillna(0)
-                ).replace(0, pd.NA)
-            elif key == "sediment_yield":
-                integrate_series(merged, "sediment_flux", "sediment_yield", time_unit="minutes", shift_source=False)
+    for key, iss in interp_issues.items():
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.INTERPOLATION_FAILED,
+            source="get_best_hydro_data",
+            details=f"interpolation failed for '{key}'",
+            causes=tuple(iss),
+        ))
 
-    # rename columns
+        trace_severity = (
+            TraceSeverity.ERROR if required.get(key)
+            else TraceSeverity.WARNING
+        )
+
+    # ------------------------------------------------------------------
+    # 5. Derived quantities (correct place for derived absence)
+    # ------------------------------------------------------------------
+    for key, deps in resolved.items():
+        derived_dep = deps["derived"]
+        if derived_dep is None:
+            continue
+
+        missing_sources = [
+            src for src in derived_dep.sources
+            if src not in merged or not merged[src].notna().any()
+        ]
+
+        if missing_sources:
+            issues.append(DataIssue(
+                reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+                source="get_best_hydro_data",
+                details=f"cannot derive '{key}'; missing source data",
+                causes=tuple(
+                    DataIssue(
+                        reason=DataAbsenceReason.NO_RECORD,
+                        source="get_best_hydro_data",
+                        details=f"source '{src}' unavailable",
+                    )
+                    for src in missing_sources
+                ),
+            ))
+
+            if required.get(key):
+                trace_severity = TraceSeverity.ERROR
+            continue
+
+        # --- compute derived ---
+        if key == "rainfall_total":
+            integrate_series(
+                merged,
+                "rainfall_intensity",
+                "rainfall_total",
+                time_unit="hours",
+                shift_source=True,
+            )
+
+        elif key == "discharge":
+            integrate_series(
+                merged,
+                "runoff",
+                "discharge",
+                time_unit="minutes",
+                shift_source=True,
+            )
+
+        elif key == "sediment_flux":
+            merged["sediment_flux"] = (
+                merged["runoff"].fillna(0)
+                * merged["sediment_concentration"].fillna(0)
+            ).replace(0, pd.NA)
+
+        elif key == "sediment_yield":
+            integrate_series(
+                merged,
+                "sediment_flux",
+                "sediment_yield",
+                time_unit="minutes",
+                shift_source=True,
+            )
+
+    # ------------------------------------------------------------------
+    # 6. Final sanity check
+    # ------------------------------------------------------------------
+    if merged.notna().sum().sum() == 0 and return_trace:
+        trace = DataTrace(
+            issues=(DataIssue(
+                reason=DataAbsenceReason.INVALID_VALUES,
+                source="get_best_hydro_data",
+                details="result dataframe contains only NA values",
+                causes=tuple(issues),
+            ),),
+            category="invalid_data",
+            level="hydro_sediment_record_set",
+            severity=trace_severity,
+        )
+
+    # ------------------------------------------------------------------
+    # 7. Finalize trace
+    # ------------------------------------------------------------------
+    if return_trace and trace is None and issues:
+        trace = DataTrace(
+            issues=tuple(issues),
+            category="data_issues",
+            level="hydro_sediment_record_set",
+            severity=trace_severity,
+        )
+
     merged = merged.rename(columns=labels)
-
-    return merged
+    return (merged, trace) if return_trace else merged
 
 
 def _resolve_present_records(*, run, dependencies, units=DEFAULT_UNITS):
-    present_records = {}
-    derived_sources = {}
+    """
+    Resolve available direct and derived data dependencies for a given run.
+
+    This helper inspects the dependency specification for each requested output
+    key and determines:
+      - whether a suitable *direct record* exists on the run (unit-aware),
+      - whether the key can alternatively be produced as a *derived value*
+        from other source keys.
+
+    The function does not load any data, perform validation, or generate issues.
+    It only resolves *availability* and *relationships* so that higher-level
+    logic (e.g. `get_best_hydro_data`) can:
+      - prefer direct records when present,
+      - fall back to derived computations when possible,
+      - emit structured `DataTrace` information when neither is viable.
+
+    Parameters
+    ----------
+    run : Run
+        Simulation run instance against which records are resolved.
+
+    dependencies : dict[str, list[dict]]
+        Mapping of output keys to dependency configurations.
+        Each configuration dictionary may define:
+          - {"record": ...}          direct record request
+          - {"derived_from": [...]}  derived dependency on other keys
+
+        Multiple configurations per key are allowed; the resolver records
+        at most one direct and one derived dependency per key.
+
+    units : dict[str, int], optional
+        Mapping of output keys to preferred unit IDs used when selecting
+        the best matching direct record. Defaults to DEFAULT_UNITS.
+
+    Returns
+    -------
+    dict[str, dict[str, RecordDep | DerivedDep | None]]
+        A mapping keyed by output field name. Each value contains:
+          - "record":  RecordDep instance or None
+          - "derived": DerivedDep instance or None
+
+        Presence of an entry does not imply validity or usability; it only
+        reflects what *could* be attempted later.
+
+    Notes
+    -----
+    - Resolution is intentionally permissive: missing records, incompatible
+      types, empty timelines, and missing derived inputs are handled later.
+    - This function is a pure resolver and should remain free of side effects
+      such as logging, tracing, or data access beyond record lookup.
+    """
+
+    resolved: dict[str, dict[str, RecordDep | DerivedDep | None]] = {}
 
     for key, configs in dependencies.items():
-        record = None
-        derived = None
+        record_dep: RecordDep | None = None
+        derived_dep: DerivedDep | None = None
 
+        # ---- resolve record ONCE per key ----
+        if any("record" in cfg for cfg in configs):
+            record = get_best_record_of_unit(
+                run=run,
+                unit_id=units.get(key),
+            )
+            record_dep = RecordDep(
+                key=key,
+                record=record,
+            )
+
+        # ---- resolve derived dependencies ----
         for cfg in configs:
-            if "record" in cfg:
-                record = get_best_record_of_unit(run=run, unit_id=units.get(key))
-                if record:
-                    break
-            elif "derived_from" in cfg:
-                derived = cfg["derived_from"]
+            if "derived_from" in cfg:
+                derived_dep = DerivedDep(
+                    key=key,
+                    sources=tuple(cfg["derived_from"]),
+                )
+                break  # only one derived dep per key is allowed
 
-        present_records[key] = record
-        if derived:
-            derived_sources[key] = derived
+        resolved[key] = {
+            "record": record_dep,
+            "derived": derived_dep,
+        }
 
-    return present_records, derived_sources
+    return resolved
+
+
+
+#
+# def _resolve_present_records(*, run, dependencies, units=DEFAULT_UNITS):
+#
+#     present_records = {}
+#     derived_sources = {}
+#
+#     for key, configs in dependencies.items():
+#         record = None
+#         derived = None
+#
+#         for cfg in configs:
+#             if "record" in cfg:
+#                 record = get_best_record_of_unit(run=run, unit_id=units.get(key))
+#                 if record:
+#                     break
+#             elif "derived_from" in cfg:
+#                 derived = cfg["derived_from"]
+#
+#         present_records[key] = record
+#         if derived:
+#             derived_sources[key] = derived
+#
+#     return present_records, derived_sources
 
 def get_best_rainfall_record(
     *,
     run,
     view_order=None,
+    return_trace: bool = False,
 ):
     """
     Returns the best available rainfall intensity record for a run.
@@ -183,62 +670,28 @@ def get_best_rainfall_record(
         return run.runoffdb.load_record_by_id(run.rain_intensity_recid)
 
     # fallback: search for any suitable rainfall intensity record
-    return get_best_record_of_unit(
+    record = get_best_record_of_unit(
         run=run,
         unit_id=[RAINFALL_INTENSITY_MMH_UNIT_ID, RAINFALL_INTENSITY_MMMIN_UNIT_ID],
         phenomenon_id=RAINFALL_PHEN_ID,
         view_order=view_order,
     )
-
-def get_rainfall_intensity_dataframe(
-    *,
-    run,
-    target_unit_id: Optional[int] = None,
-    series_label: str = "rain_intensity",
-) -> Optional[pd.DataFrame]:
-    """
-    Return rainfall intensity timeline DataFrame for a run, or None if invalid.
-
-    Validity rules:
-    - must be a timeline
-    - must contain at least two rows
-    - if exactly two rows, last value must be zero
-    """
-
-    rec_id = getattr(run, "rain_intensity_recid", None)
-    if rec_id is None:
-        return None
-
-    record = get_best_rainfall_record(run=run)
-    if record is None:
-        return None
-
-    try:
-        df = _get_record_timeline(
-            run=run,
-            record=record,
-            value_label=series_label,
-            target_unit_id=target_unit_id,
+    if record and return_trace:
+        # release an issue that the rainfall record exists but the dedication is not assigned
+        issue = DataIssue(
+            reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
+            source="get_best_rainfall_record",
+            details=f"rainfall intensity record found but is not assigned as dedicated rainfall intensity record",
         )
-    except DataframeEmptyError:
-        raise
+        return record, issue
 
-    if df is None or df.empty:
-        return None
-
-    if len(df.index) < 2:
-        return None
-
-    if len(df.index) == 2:
-        if df[series_label].iloc[-1] != 0:
-            return None
-
-    return df
+    return record
 
 def get_rainfall_intensity_value(
     *,
-    run,
+    run: Run,
     target_unit_id: Optional[int] = None,
+    return_trace: bool = False,
 ) -> Optional[object]:
     """
     Return representative rainfall intensity value.
@@ -250,32 +703,62 @@ def get_rainfall_intensity_value(
     - None → unavailable / invalid
     """
 
-    try:
-        df = get_rainfall_intensity_dataframe(
-            run=run,
-            target_unit_id=target_unit_id,
-            series_label="rain_intensity",
-        )
-    except DataframeEmptyError:
-        return None
+    issue: DataIssue | None = None
+
+    record, rec_issue = get_best_rainfall_record(run=run)
+
+    if not record:
+        issue = DataIssue(
+                    reason=DataAbsenceReason.NO_RECORD,
+                    source="get_best_rainfall_record",
+                    details=f"no rainfall intensity record found for run",
+                )
+        if return_trace:
+            return None, issue
+
+    df, issue = get_record_data(
+        run=run,
+        record=record,
+        target_unit_id=target_unit_id,
+        value_label="rain_intensity",)
 
     if df is None:
-        return None
+        return (df, issue) if return_trace else df
+    if df.empty:
+        return (df, issue) if return_trace else df
 
     values = df["rain_intensity"]
 
     if len(values) == 2:
+        # the last value of a propper rainfall timeline is 0 (zero)
         if values.iloc[-1] != 0:
-            return None
-        return values.iloc[0]
+            issue = DataIssue(
+                reason=DataAbsenceReason.INVALID_VALUES,
+                source="get_best_rainfall_record",
+                details=f"rainfall intensity record #{record.id} has non-zero last value",
+            )
+            return (None, issue) if return_trace else None
+
+        return (values.iloc[0], None) if return_trace else values.iloc[0]
 
     # variable / interrupted rainfall
     zero_count = (values == 0).sum()
 
     if zero_count > 1:
-        return "interrupted"
+        issue = DataIssue(
+            reason=DataAbsenceReason.INVALID_VALUES,
+            source="get_best_rainfall_record",
+            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
+        )
+        return ("interrupted", issue) if return_trace else "interrupted"
 
-    return "variable"
+    else:
+        issue = DataIssue(
+            reason=DataAbsenceReason.INVALID_VALUES,
+            source="get_best_rainfall_record",
+            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
+        )
+        return ("variable", issue) if return_trace else "variable"
 
 def get_best_sediment_concentration_record(
         *,
@@ -284,7 +767,7 @@ def get_best_sediment_concentration_record(
         ):
     return get_best_record_of_unit(
         run=run,
-        unit_id=[SS_CONCENTRATION_MGL_UNIT_ID, SS_CONCENTRATION_GL_UNIT_ID],
+        unit_id=SS_CONCENTRATION_UNITS,
         phenomenon_id=SEDIMENT_QUANTITY_PHEN_ID,
         view_order=view_order)
 
@@ -296,26 +779,10 @@ def get_best_runoff_record(
         ):
     return get_best_record_of_unit(
         run=run,
-        unit_id=RUNOFF_RATE_LMIN_UNIT_ID,
+        unit_id=RUNOFF_RATE_UNITS,
         phenomenon_id=SURFACE_RUNOFF_PHEN_ID,
         view_order=view_order)
 
-def _get_record_timeline(*, run, record, value_label, target_unit_id):
-    """
-    Fetches data for a specific record, optionally converts it to target unit, and logs its status.
-    :return: DataFrame with the data for the record.
-    """
-    if target_unit_id and record.unit_id != target_unit_id:
-        return get_record_data(
-            target_unit_id=target_unit_id,
-            value_label=value_label,
-            demand_timeline=True,
-        )
-
-    return record.get_data(
-        value_label=value_label,
-        demand_timeline=True,
-    )
 
 
 def _adjust_end_time(merged_data, kwargs):

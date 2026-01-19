@@ -1,7 +1,6 @@
 from typing import Iterable, Optional
 import pandas as pd
 
-from src.exceptions import DataframeEmptyError
 from src.setup.unit_ids import *
 from src.services.record_resolution import get_best_record_of_unit, get_record_data
 from src.entities.record import *
@@ -42,6 +41,7 @@ def get_best_bulk_density_value(
     run,
     target_unit_id: Optional[int] = None,
     label: str = "bulk_density",
+    return_trace: bool = False
 ) -> Optional[float]:
     """
     Return mean bulk density value for the run, if available.
@@ -51,15 +51,12 @@ def get_best_bulk_density_value(
     if record is None:
         return None
 
-    try:
-        df = get_record_data(
-            run=run,
-            record=record,
-            value_label=label,
-            target_unit_id=target_unit_id,
-        )
-    except DataframeEmptyError:
-        raise
+    df = get_record_data(
+        run=run,
+        record=record,
+        value_label=label,
+        target_unit_id=target_unit_id,
+    )
 
     if df is None or df.empty:
         return None
@@ -114,15 +111,12 @@ def get_best_soil_texture_data(
     if texture_record is None:
         return None
 
-    try:
-        df = texture_record.get_data(
-            value_label=x_label,
-            related_x=y_label,
-            index_column=y_label,
-            order_by=order_by,
-        )
-    except DataframeEmptyError:
-        raise
+    df = texture_record.get_data(
+        value_label=x_label,
+        related_x=y_label,
+        index_column=y_label,
+        order_by=order_by,
+    )
 
     if df is None or df.empty:
         return None

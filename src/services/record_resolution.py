@@ -1,7 +1,11 @@
-from .unit_conversion import convert_dataframe_units
+from .unit_conversion import convert_dataframe_units, UnitConversionError
 from src.setup.unit_ids import *
 from src.setup.entity_ids import *
-from src.exceptions import DataframeEmptyError
+
+from src.diagnostics.trace import DataIssue
+from src.diagnostics.absence_reasons import DataAbsenceReason
+from src.diagnostics.trace import DataTrace, DataIssue
+from ..utilities.utilities import remove_last_zero_row
 
 DEFAULT_RECORD_TYPE_PRIORITY = [
     2,  # edited data
@@ -58,30 +62,81 @@ def get_record_data(
     run,
     record,
     value_label,
-    target_unit_id,
-    demand_timeline=False
+    related_x_label=None,
+    related_y_label=None,
+    related_z_label=None,
+    target_unit_id=None,
+    remove_last_zero=False,
+    return_trace: bool = False,
 ):
     """
     Load record data, enforce timeline, convert units if needed.
+
+    Returns:
+    - DataFrame
+    - (DataFrame, DataTrace) if return_trace=True
     """
-    df = record.get_data(
-        value_label=value_label,
-        demand_timeline=demand_timeline,
-    )
+    import pandas as pd
 
-    if df is None or df.empty:
-        return df
+    issue: DataIssue | None = None
 
-    if target_unit_id and record.unit_id != target_unit_id:
-        df = convert_dataframe_units(
-            df=df,
-            source_unit_id=record.unit_id,
-            target_unit_id=target_unit_id,
-            value_column=value_label,
-            output_column=value_label,
+    df = pd.DataFrame()
+
+    try:
+        df = record.get_data(
+            value_label=value_label,
+            related_x_label=related_x_label,
+            related_y_label=related_y_label,
+            related_z_label=related_z_label,
         )
 
-    return df
+        if df.empty:
+            issue = DataIssue(
+                reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+                source="get_record_data",
+                details=f"no data found for record {record.id} (requested as '{value_label}')",
+            )
+            return (df, issue) if return_trace else df
+
+
+        # unit conversion
+        if target_unit_id and record.unit_id != target_unit_id:
+            before_non_na = df[value_label].notna().sum()
+            try:
+                df = convert_dataframe_units(
+                    df=df,
+                    source_unit_id=record.unit_id,
+                    target_unit_id=target_unit_id,
+                    value_column=value_label,
+                    output_column=value_label,
+                )
+            except UnitConversionError as e:
+                issue = DataIssue(
+                    reason=DataAbsenceReason.UNIT_CONVERSION_FAILED,
+                    source="get_record_data",
+                    details=f"unit conversion failed: {str(e)}",
+                )
+
+            after_non_na = df[value_label].notna().sum()
+            if after_non_na == 0 and before_non_na > 0:
+                issue = DataIssue(
+                    reason=DataAbsenceReason.UNIT_CONVERSION_FAILED,
+                    source="get_record_data",
+                    details=f"units conversion {record.unit_id} -> {target_unit_id} removed all values",
+                )
+
+    except Exception as exc:
+        issue = DataIssue(
+            reason=DataAbsenceReason.UNKNOWN,
+            source="get_record_data",
+            details=str(exc),
+        )
+
+    else:
+        if remove_last_zero:
+            df = remove_last_zero_row(df)
+
+    return (df, issue) if return_trace else df
 
 
 def get_best_initial_moisture_record(*, run, view_order=None):
@@ -124,10 +179,7 @@ def get_initial_moisture_value(
 
     if record is None:
         return None
-    try:
-        data = record.get_data(value_label="initial_moisture")
-    except DataframeEmptyError:
-        return None
+    data = record.get_data(value_label="initial_moisture")
 
     if data is None:
         return None
@@ -142,7 +194,7 @@ def get_initial_moisture_value(
 
     return values.mean()
 
-def get_best_surface_cover_record(*, run):
+def get_best_surface_cover_record(*, run, return_trace: bool = False):
     """
     Resolves the best surface cover record for a run.
 
@@ -151,23 +203,53 @@ def get_best_surface_cover_record(*, run):
     2. best available generic surface cover record
     """
 
+    issues: list[DataIssue] = ()
+
     # 1. dedicated record
-    rec_id = getattr(run, "surface_cover_recid", None)
+    rec_id = run.surface_cover_recid
     if rec_id:
         record = run.runoffdb.load_record_by_id(rec_id)
         if record:
-            return record
+            return (record, None) if return_trace else record
+        else:
+            issues.append(DataIssue(
+                            reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
+                            source="get_best_surface_cover_record",
+                            details=f"dedicated surface cover record not set",
+                        )
+                    )
+            return (None, issues) if return_trace else None
+    else:
+        # 2. fallback: try to get any surface cover record
+        record = get_best_record_of_unit(
+            run=run,
+            unit_id=SURFACE_COVER_PERC_UNIT_ID,
+        )
 
-    # 2. fallback: generic surface cover record
-    return get_best_record_of_unit(
-        run=run,
-        unit_id=SURFACE_COVER_PERC_UNIT_ID,
-    )
+    if record:
+        issues.append(DataIssue(
+                reason=DataAbsenceReason.DEDICATION_MISSING,
+                source="get_best_surface_cover_record",
+                details=f"surface cover record found, but is not set as 'dedicated'",
+            )
+        )
+        return (record, issues) if return_trace else record
+
+    # fallback also failed
+    issues.append(DataIssue(
+                    reason=DataAbsenceReason.NO_RECORD,
+                    source="get_best_surface_cover_record",
+                    details=f"no surface cover record found",
+                    )
+                )
+
+    return (None, tuple(issues)) if return_trace else None
 
 def get_surface_cover_value(
     *,
-    run,
+    run: "Run",
     multi_value: bool = False,
+    return_trace: bool = False,
 ):
     """
     Returns surface cover value for a run.
@@ -181,31 +263,47 @@ def get_surface_cover_value(
         - return 0 for no-cover crop
         - otherwise None
     """
-
-    record = get_best_surface_cover_record(run=run)
+    issues: list[DataIssue] = []
+    record, sub_issues = get_best_surface_cover_record(run=run, return_trace=return_trace)
 
     if record:
-        try:
-            df = record.get_data(value_label="surface_cover")
-        except DataframeEmptyError:
-            return None
+        df = get_record_data(run=run, record=record, value_label="surface_cover")
 
         if len(df.index) == 1:
-            return df["surface_cover"].iloc[0]
+            return (df["surface_cover"].iloc[0], sub_issues) if return_trace else df["surface_cover"].iloc[0]
 
         if multi_value:
-            return df["surface_cover"].tolist()
+            if sub_issues:
+                return df["surface_cover"].tolist(), sub_issues
+            else:
+                return df["surface_cover"].tolist()
 
-        return df["surface_cover"].mean()
+        # the record has more values than one but single value was requested
+        sub_issues.add(DataIssue(
+                reason=DataAbsenceReason.DERIVED_MEAN,
+                source="get_surface_cover_value",
+                details=f"surface cover record has more than 1 value and single value was requested - mean value returned",
+            )
+        )
+        return (df["surface_cover"].mean(), tuple(sub_issues)) if return_trace else df["surface_cover"].mean()
 
-    # fallback: derive from crop type
-    crop = getattr(run, "crop", None)
-    if crop and crop.crop_type_id == NO_COVER_CROP_TYPE_ID:
-        return 0
+    elif run.crop:
+        if run.crop.crop_type_id == NO_COVER_CROP_TYPE_ID:
+            issue = DataIssue(
+                reason=DataAbsenceReason.IMPLICIT_VALUE,
+                source="days_since_last_operation",
+                details=f"days since last operation implicitly assumed = 0 for 'cultivated fallow'",
+            )
+            return (0, (issue,)) if return_trace else 0
 
     return None
 
-def get_crop_height_value(*, run):
+def get_crop_height_value(
+    *,
+    run: "Run",
+    multi_value: bool = False,
+    return_trace: bool = False,
+):
     """
     Returns crop height value for a run.
 
@@ -222,17 +320,19 @@ def get_crop_height_value(*, run):
     if record is None:
         return None
 
-    try:
-        df = record.get_data(value_label="crop_height")
-    except DataframeEmptyError:
-        return None
+    df = record.get_data(value_label="crop_height")
 
     if df is None or df.empty:
         return None
 
     return df["crop_height"].mean()
 
-def get_plant_density_value(*, run):
+def get_plant_density_value(
+    *,
+    run: "Run",
+    multi_value: bool = False,
+    return_trace: bool = False,
+):
     """
     Returns plant density value for a run.
 
@@ -248,10 +348,7 @@ def get_plant_density_value(*, run):
     if record is None:
         return None
 
-    try:
-        df = record.get_data(value_label="plant_density")
-    except DataframeEmptyError:
-        return None
+    df = record.get_data(value_label="plant_density")
 
     if df is None or df.empty:
         return None
