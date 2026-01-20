@@ -119,42 +119,41 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
 
     RunColumn(
         header={"cz": "ochranná opatření", "en": "soil protection measures"},
-        getter=lambda r, ctx: r.plot.get_protection_measures_names(ctx["lang"], return_trace=True)
+        getter=lambda r, ctx: r.plot.get_protection_measures_names(lang=ctx["lang"], return_trace=True)
     ),
 
     RunColumn(
         header={"cz": "výška plodiny [cm]", "en": "crop height [cm]"},
         getter=lambda r, ctx:
-            get_crop_height_value(run=r, return_trace=True) or ctx["no_data_value"],
+            get_crop_height_value(run=r, return_trace=True, multi_value=False),
     ),
 
-    # RunColumn(
-    #     header={"cz": "počet rostlin [1/m2]", "en": "plant density [pcs.m^2]"},
-    #     getter=lambda r, ctx:
-    #         get_plant_density_value(run=r, return_trace=True) or ctx["no_data_value"],
-    # ),
+    RunColumn(
+        header={"cz": "počet rostlin [1/m2]", "en": "plant density [pcs.m^2]"},
+        getter=lambda r, ctx:
+            get_plant_density_value(run=r, return_trace=True, multi_value=False),
+    ),
 
-    # RunColumn(
-    #     header={"cz": "BBCH", "en": "BBCH"},
-    #     getter=lambda r, ctx: r.bbch or ctx["no_data_value"],
-    # ),
-    #
-    # RunColumn(
-    #     header={"cz": "zakrytí povrchu [%]", "en": "surface cover [%]"},
-    #     getter=lambda r, ctx:
-    #         get_surface_cover_value(run=r, multi_value=False, return_trace=True) or ctx["no_data_value"],
-    # ),
-    #
-    # RunColumn(
-    #     header={"cz": "počáteční stav", "en": "initial cond."},
-    #     getter=lambda r, ctx: r.run_type.name[ctx["lang"]],
-    # ),
-    #
-    # RunColumn(
-    #     header={"cz": "počáteční vlhkost [%V]", "en": "init. moisture [%V]"},
-    #     getter=lambda r, ctx:
-    #         get_initial_moisture_value(run=r, multi_value=False, return_trace=True) or ctx["no_data_value"],
-    # ),
+    RunColumn(
+        header={"cz": "BBCH", "en": "BBCH"},
+        getter=lambda r, ctx: (r.bbch, None),
+    ),
+
+    RunColumn(
+        header={"cz": "zakrytí povrchu [%]", "en": "surface cover [%]"},
+        getter=lambda r, ctx: get_surface_cover_value(run=r, multi_value=False, return_trace=True),
+    ),
+
+    RunColumn(
+        header={"cz": "počáteční stav", "en": "initial cond."},
+        getter=lambda r, ctx: get_run_type_name(run=r, ctx=ctx, return_trace=True),
+    ),
+
+    RunColumn(
+        header={"cz": "počáteční vlhkost [%V]", "en": "init. moisture [%V]"},
+        getter=lambda r, ctx:
+            get_initial_moisture_value(run=r, multi_value=False, return_trace=True),
+    ),
     #
     # # --- soil texture fractions ---
     # RunColumn(
@@ -171,13 +170,13 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     #     header={"cz": "<0.063, 2mm>", "en": "<0.063, 2mm>"},
     #     getter=_soil_texture_value(2),
     # ),
-    #
-    # RunColumn(
-    #     header={"cz": "objemová hmotnost [g/cm3]", "en": "bulk density [g.cm-3]"},
-    #     getter=lambda r, ctx:
-    #         get_best_bulk_density_value(run=r, target_unit_id=BULK_DENSITY_GCM_UNIT_ID, return_trace=True) or ctx["no_data_value"],
-    # ),
-    #
+
+    RunColumn(
+        header={"cz": "objemová hmotnost [g/cm3]", "en": "bulk density [g.cm-3]"},
+        getter=lambda r, ctx:
+            get_best_bulk_density_value(run=r, target_unit_id=BULK_DENSITY_GCM_UNIT_ID, return_trace=True),
+    ),
+
     # RunColumn(
     #     header={"cz": "TTR", "en": "time to runoff"},
     #     getter=lambda r, ctx: r.ttr,

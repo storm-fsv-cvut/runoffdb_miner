@@ -55,3 +55,18 @@ def get_crop_condition(run: "Run", ctx, return_trace: bool = False) -> tuple[str
 
     cond = run.crop_condition.get(ctx["lang"])
     return (cond, None) if return_trace else cond
+
+def get_run_type_name(run: "Run", ctx, return_trace: bool = False) -> tuple[str | None, DataIssue | None]:
+
+    # name missing in requested language
+    name = run.run_type.name.get(ctx["lang"])
+    if not name:
+        issue = (DataIssue(
+            reason=DataAbsenceReason.MISSING_PROPERTY_TRANSLATION,
+            source="get_run_type_name",
+            details=f"run type ID {run.run_type_id} does not have a name in language '{ctx['lang']}'",
+        ), )
+        return None, issue if return_trace else None
+
+    # everything ok
+    return (name, None) if return_trace else name

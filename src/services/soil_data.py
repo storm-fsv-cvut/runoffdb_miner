@@ -2,67 +2,91 @@ from typing import Iterable, Optional
 import pandas as pd
 
 from src.setup.unit_ids import *
-from src.services.record_resolution import get_best_record_of_unit, get_record_data
+from src.services.record_resolution import get_best_record_of_unit, get_record_data, get_record_scalar_value
 from src.entities.record import *
 
+from src.diagnostics.absence_reasons import DataAbsenceReason
+from src.diagnostics.trace import DataIssue
 
 # public API
-def get_best_bulk_density_record(*, run) -> Optional["Record"]:
-    """
-    Resolve the best available bulk density record for a run.
-
-    Resolution order:
-    1. Dedicated bulk density soil sample record (if assigned)
-    2. Best available bulk density record by unit / phenomenon
-    """
-
-    # 1. dedicated bulk density soil sample
-    bulkd_ss = getattr(run, "bulkd_ss", None)
-
-    if bulkd_ss is not None:
-        record_id = getattr(bulkd_ss, "bulk_density_id", None)
-        if record_id is not None:
-            record = run.runoffdb.load_record_by_id(record_id)
-            if record is not None:
-                return record
-            return None
-
-        return None
-
-    # 2. fallback: any bulk density record
-    return get_best_record_of_unit(
-        run=run,
-        unit_id=[BULK_DENSITY_GCM_UNIT_ID, BULK_DENSITY_KGM_UNIT_ID],
-        phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
-    )
+# def get_best_bulk_density_record(*, run) -> Optional["Record"]:
+#     """
+#     Resolve the best available bulk density record for a run.
+#
+#     Resolution order:
+#     1. Dedicated bulk density soil sample record (if assigned)
+#     2. Best available bulk density record by unit / phenomenon
+#     """
+#
+#     # 1. dedicated bulk density soil sample
+#     bulkd_ss = getattr(run, "bulkd_ss", None)
+#
+#     if bulkd_ss is not None:
+#         record_id = getattr(bulkd_ss, "bulk_density_id", None)
+#         if record_id is not None:
+#             record = run.runoffdb.load_record_by_id(record_id)
+#             if record is not None:
+#                 return record
+#             return None
+#
+#         return None
+#
+#     # 2. fallback: any bulk density record
+#     return get_best_record_of_unit(
+#         run=run,
+#         unit_id=[BULK_DENSITY_GCM_UNIT_ID, BULK_DENSITY_KGM_UNIT_ID],
+#         phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
+#     )
+#
 
 def get_best_bulk_density_value(
     *,
-    run,
-    target_unit_id: Optional[int] = None,
-    label: str = "bulk_density",
-    return_trace: bool = False
-) -> Optional[float]:
-    """
-    Return mean bulk density value for the run, if available.
-    """
+    run: "Run",
+    target_unit_id = None,
+    multi_value: bool = False,
+    return_trace: bool = False,
+):
 
-    record = get_best_bulk_density_record(run=run)
-    if record is None:
-        return None
-
-    df = get_record_data(
+    return get_record_scalar_value(
         run=run,
-        record=record,
-        value_label=label,
+        unit_id=BULK_DENSITY_UNITS,
+        phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
+        dedicated_recid_attr="bulkd_ss_id",
         target_unit_id=target_unit_id,
+        value_label="bulk_density",
+        source="get_best_bulk_density_value",
+        multi_value=multi_value,
+        return_trace=return_trace,
     )
 
-    if df is None or df.empty:
-        return None
-
-    return df[label].mean()
-
+#
+# def get_best_bulk_density_value(
+#     *,
+#     run,
+#     target_unit_id: Optional[int] = None,
+#     label: str = "bulk_density",
+#     return_trace: bool = False
+# ) -> Optional[float]:
+#     """
+#     Return mean bulk density value for the run, if available.
+#     """
+#
+#     record = get_best_bulk_density_record(run=run)
+#     if record is None:
+#         return None
+#
+#     df = get_record_data(
+#         run=run,
+#         record=record,
+#         value_label=label,
+#         target_unit_id=target_unit_id,
+#     )
+#
+#     if df is None or df.empty:
+#         return None
+#
+#     return df[label].mean()
+#
 
 def get_best_soil_texture_record(*, run):
     """

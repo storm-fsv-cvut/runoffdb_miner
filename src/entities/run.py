@@ -134,28 +134,6 @@ class Run:
         else:
             return None
 
-    # def load_measurements(self):
-    #     msrmsnts = None
-    #     with self.runoffdb.get_connection() as dbcon:
-    #         with dbcon.cursor(dictionary=True) as thecursor:
-    #             query = f"SELECT * FROM {measurements_table} " \
-    #                     f"JOIN {measurement_run_table} ON {measurement_run_table}.`measurement_id` = {measurements_table}.`id` " \
-    #                     f"WHERE {measurement_run_table}.`run_id` = {self.id}"
-    #             # print(query)
-    #             thecursor.execute(query)
-    #             results = thecursor.fetchall()
-    #             thecursor.close()
-    #
-    #             if len(results) == 0:
-    #                 # print(f"\tNo measurement found for run {self.id}")
-    #                 return {}
-    #             else:
-    #                 msrmsnts = {}
-    #                 for res in results:
-    #                     new_measurement = Measurement(self.runoffdb, **res)
-    #                     msrmsnts.update({new_measurement.id: new_measurement})
-    #     return msrmsnts
-
     def get_measurements(self, phenomenon_id=None):
         if self.measurements:
             out = []
@@ -177,24 +155,6 @@ class Run:
                 return self.get_measurements(phenomenon_id)
             else:
                 return None
-    #
-    # def get_project_ids(self):
-    #     ids = None
-    #     with self.runoffdb.get_connection() as dbcon:
-    #         with dbcon.cursor() as thecursor:
-    #             # execute the query and fetch the results
-    #             query = f"SELECT `project_id` FROM `sequence_project` WHERE `sequence_id` = {self.sequence_id}"
-    #
-    #             thecursor.execute(query)
-    #             results = thecursor.fetchall()
-    #             thecursor.close()
-    #
-    #             if len(results)> 0:
-    #                 ids = []
-    #                 for r in results:
-    #                     ids.append(r[0])
-    #     return ids
-    #
 
     def get_terminal_velocity_value(self, time=None, record_type=None):
         found_records = self.get_records([15], 5, record_type_id=record_type)
