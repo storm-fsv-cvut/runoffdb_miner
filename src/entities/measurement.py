@@ -3,9 +3,6 @@ from ..utilities.utilities import *
 from ..setup.entity_ids import *
 from ..setup.table_names import *
 
-from ..entities.record import Record
-
-
 class Measurement:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb

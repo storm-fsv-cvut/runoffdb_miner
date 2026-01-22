@@ -2,113 +2,174 @@ from typing import Iterable, Optional
 import pandas as pd
 
 from src.setup.unit_ids import *
-from src.services.record_resolution import get_best_record_of_unit, get_record_data, get_record_scalar_value
+from src.services.record_resolution import get_best_record_of_unit, get_record_data, get_record_scalar_value, record_matches_units
 from src.entities.record import *
+from src.entities.soil_sample import SoilSample
 
 from src.diagnostics.absence_reasons import DataAbsenceReason
 from src.diagnostics.trace import DataIssue
 
 # public API
-# def get_best_bulk_density_record(*, run) -> Optional["Record"]:
-#     """
-#     Resolve the best available bulk density record for a run.
-#
-#     Resolution order:
-#     1. Dedicated bulk density soil sample record (if assigned)
-#     2. Best available bulk density record by unit / phenomenon
-#     """
-#
-#     # 1. dedicated bulk density soil sample
-#     bulkd_ss = getattr(run, "bulkd_ss", None)
-#
-#     if bulkd_ss is not None:
-#         record_id = getattr(bulkd_ss, "bulk_density_id", None)
-#         if record_id is not None:
-#             record = run.runoffdb.load_record_by_id(record_id)
-#             if record is not None:
-#                 return record
-#             return None
-#
-#         return None
-#
-#     # 2. fallback: any bulk density record
-#     return get_best_record_of_unit(
-#         run=run,
-#         unit_id=[BULK_DENSITY_GCM_UNIT_ID, BULK_DENSITY_KGM_UNIT_ID],
-#         phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
-#     )
-#
 
-def get_best_bulk_density_value(
+def get_best_soil_dedicated_record(
     *,
     run: "Run",
-    target_unit_id = None,
-    multi_value: bool = False,
+    dedicated_ss_attr: str,
+    dedicated_rec_attr: str,
+    allowed_units: int | list[int],
+    phenomenon_id: int,
     return_trace: bool = False,
 ):
-
-    return get_record_scalar_value(
-        run=run,
-        unit_id=BULK_DENSITY_UNITS,
-        phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
-        dedicated_recid_attr="bulkd_ss_id",
-        target_unit_id=target_unit_id,
-        value_label="bulk_density",
-        source="get_best_bulk_density_value",
-        multi_value=multi_value,
-        return_trace=return_trace,
-    )
-
-#
-# def get_best_bulk_density_value(
-#     *,
-#     run,
-#     target_unit_id: Optional[int] = None,
-#     label: str = "bulk_density",
-#     return_trace: bool = False
-# ) -> Optional[float]:
-#     """
-#     Return mean bulk density value for the run, if available.
-#     """
-#
-#     record = get_best_bulk_density_record(run=run)
-#     if record is None:
-#         return None
-#
-#     df = get_record_data(
-#         run=run,
-#         record=record,
-#         value_label=label,
-#         target_unit_id=target_unit_id,
-#     )
-#
-#     if df is None or df.empty:
-#         return None
-#
-#     return df[label].mean()
-#
-
-def get_best_soil_texture_record(*, run):
     """
-    Resolves the best soil texture record for a run.
+    Resolve the best soil-related record for a run using a dedicated soil sample,
+    with fallback to any assigned soil sample.
 
     Resolution order:
-    1. dedicated soil texture sample record
-    2. best available generic texture record
+    1. Dedicated soil sample on run (e.g. run.texture_ss)
+       1.a sample reference invalid
+       1.b dedicated record not assigned
+       1.c record missing / wrong phenomenon / incompatible units
+       1.d valid dedicated record returned
+    2. Fallback: any soil sample assigned to run
+       2.a no suitable record found
+       2.b generic record found (reported as non-dedicated)
     """
 
-    # 1. dedicated texture soil sample
-    ss = getattr(run, "texture_ss", None)
-    if ss and ss.texture_record_id:
-        record = run.runoffdb.load_record_by_id(ss.texture_record_id)
-        if record:
-            return record
+    issues: list[DataIssue] = []
 
-    # 2. fallback: generic texture record
-    try:
-        return get_best_record_of_unit(run=run, unit_id=CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID, phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID)
-    except Exception:
-        return None
+    # normalize allowed units
+    if not isinstance(allowed_units, (list, tuple, set)):
+        allowed_units = [allowed_units]
+
+    # --------------------------------------------------
+    # 1. dedicated soil sample path
+    # --------------------------------------------------
+    ss = getattr(run, dedicated_ss_attr, None)
+
+    if ss is not None:
+
+        # 1.a invalid soil sample reference
+        if not isinstance(ss, SoilSample):
+            issues.append(DataIssue(
+                reason=DataAbsenceReason.DATABASE_RECORD_INVALID,
+                source="get_best_soil_dedicated_record",
+                details=(
+                    f"run.{dedicated_ss_attr} references a non-existent SoilSample ID {ss}"
+                ),
+            ))
+            return (None, tuple(issues)) if return_trace else None
+
+        # 1.b dedicated record ID on soil sample
+        rec_id = getattr(ss, dedicated_rec_attr, None)
+        if not rec_id:
+            issues.append(DataIssue(
+                reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
+                source="get_best_soil_dedicated_record",
+                details=(
+                    f"dedicated SoilSample '{dedicated_ss_attr}' does not have appropriate dedicated record assigned"
+                    f"(attribute {dedicated_rec_attr})"
+                ),
+            ))
+        else:
+            record = run.runoffdb.load_record_by_id(rec_id)
+
+            # 1.c.1 record missing
+            if not record:
+                issues.append(DataIssue(
+                    reason=DataAbsenceReason.RECORD_NOT_FOUND,
+                    source="get_best_soil_dedicated_record",
+                    details=(
+                        f"SoilSample.{dedicated_rec_attr}={rec_id} "
+                        f"but record not found"
+                    ),
+                ))
+                return (None, tuple(issues)) if return_trace else None
+
+            # 1.c.2 wrong phenomenon
+            if record.phenomenon_id != phenomenon_id:
+                issues.append(DataIssue(
+                    reason=DataAbsenceReason.INVALID_RECORD_TYPE,
+                    source="get_best_soil_dedicated_record",
+                    details=(
+                        f"record ID {record.id} has phenomenon "
+                        f"{record.phenomenon_id}, expected {phenomenon_id}"
+                    ),
+                ))
+                return (None, tuple(issues)) if return_trace else None
+
+            # 1.c.3 incompatible units
+            if not record_matches_units(
+                record,
+                allowed_unit_ids=allowed_units,
+            ):
+                issues.append(DataIssue(
+                    reason=DataAbsenceReason.INCOMPATIBLE_UNIT_SET,
+                    source="get_best_soil_dedicated_record",
+                    details=(
+                        f"record ID {record.id} has incompatible units "
+                        f"(unit_id={record.unit_id}, "
+                        f"x={record.related_value_x_unit_id}, "
+                        f"y={record.related_value_y_unit_id}, "
+                        f"z={record.related_value_z_unit_id})"
+                    ),
+                ))
+                return (None, tuple(issues)) if return_trace else None
+
+            # 1.d success
+            return (record, None) if return_trace else record
+
+    # --------------------------------------------------
+    # 2. generic fallback via all soil samples
+    # --------------------------------------------------
+    samples = run.runoffdb.get_soil_samples_of_run(run)
+
+    for ss in samples:
+        record = ss.get_best_record_of_unit(
+            unit_id=allowed_units,
+            phenomenon_id=phenomenon_id,
+        )
+
+        if not record:
+            continue
+
+        if not record_matches_units(
+            record,
+            allowed_unit_ids=allowed_units,
+        ):
+            continue
+
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.DEDICATION_MISSING,
+            source="get_best_soil_dedicated_record",
+            details=(
+                "soil property record found on non-dedicated soil sample"
+            ),
+        ))
+
+        return (record, tuple(issues)) if return_trace else record
+
+    # --------------------------------------------------
+    # 3. nothing found
+    # --------------------------------------------------
+    return (None, tuple(issues)) if return_trace else None
+
+
+def get_best_soil_texture_record(
+    *,
+    run: "Run",
+    return_trace: bool = False,
+):
+    return get_best_soil_dedicated_record(
+        run=run,
+        dedicated_ss_attr="texture_ss",
+        dedicated_rec_attr="texture_recid",
+        allowed_units=[
+            CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID,
+            PARTICLE_SIZE_THRESHOLD_MM_UNIT_ID,
+        ],
+        phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
+        return_trace=return_trace,
+    )
 
 
 def get_best_soil_texture_data(
@@ -116,10 +177,11 @@ def get_best_soil_texture_data(
     run,
     x_label: str = "cumulative_mass_content",
     y_label: str = "particle_size",
-    order_by: Optional[str] = None,
+    order_by: Optional[str] = "particle_size",
     limits: Optional[Iterable[float]] = None,
     return_int: bool = False,
     return_cumulative: bool = False,
+    return_trace: bool = True,
 ) -> Optional[pd.DataFrame]:
     """
     Returns best available soil texture data for a run.
@@ -130,10 +192,22 @@ def get_best_soil_texture_data(
     """
 
     order_by = order_by or DB_2ND_DIM_VALUE_COLUMN
+    issues: list[DataIssue] = []
 
-    texture_record = get_best_soil_texture_record(run=run)
+    texture_record, sub_issues = get_best_soil_texture_record(run=run, return_trace=return_trace)
+
+
     if texture_record is None:
-        return None
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_RECORD,
+            source="get_best_soil_texture_data",
+            details="No soil texture record found for run and related soil samples",
+            causes=sub_issues
+        ))
+        return (None, tuple(issues)) if return_trace else None
+
+    if sub_issues:
+        issues.extend(sub_issues)
 
     df = texture_record.get_data(
         value_label=x_label,
@@ -143,7 +217,12 @@ def get_best_soil_texture_data(
     )
 
     if df is None or df.empty:
-        return None
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+            source="get_best_soil_texture_data",
+            details=f"soil texture record ID {texture_record.id} contains no data",
+        ))
+        return (None, tuple(issues)) if return_trace else None
 
     if limits:
         df = interpolate_texture(
@@ -156,6 +235,49 @@ def get_best_soil_texture_data(
 
     return df
 
+
+def get_best_bulk_density_value(
+    *,
+    run: "Run",
+    target_unit_id = None,
+    multi_value: bool = False,
+    return_trace: bool = False,
+):
+    issues: list[DataIssue] = []
+
+    record, sub_issues = get_best_soil_dedicated_record(
+        run=run,
+        dedicated_ss_attr="bulkd_ss_id",
+        dedicated_rec_attr="bulk_density_id",
+        allowed_units=BULK_DENSITY_UNITS,
+        phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
+        return_trace=return_trace,
+    )
+    if not record:
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_RECORD,
+            source="get_best_bulk_density_value",
+            details="No bulk density record found for run and related soil samples",
+            causes=sub_issues
+        ))
+        return (None, tuple(issues)) if return_trace else None
+
+    if sub_issues:
+        issues.extend(sub_issues)
+
+    value, sub_issues = get_record_scalar_value(
+        record=record,
+        target_unit_id=target_unit_id,
+        value_label="bulk_density",
+        source="get_best_bulk_density_value",
+        multi_value=multi_value,
+        return_trace=return_trace,
+    )
+
+    if sub_issues:
+        issues.extend(sub_issues)
+
+    return (value, tuple(issues)) if return_trace else value
 
 def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative=True, return_int=True, smallest_content=1):
     import pandas as pd

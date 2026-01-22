@@ -369,7 +369,6 @@ def get_best_hydro_data(
 
         # 1c. load timeline
         df, sub_issues = get_record_data(
-            run=run,
             record=record,
             value_label=key,
             target_unit_id=DEFAULT_UNITS.get(key),
@@ -602,7 +601,7 @@ def _resolve_present_records(*, run, dependencies, units=DEFAULT_UNITS):
         # ---- resolve record ONCE per key ----
         if any("record" in cfg for cfg in configs):
             record = get_best_record_of_unit(
-                run=run,
+                owner=run,
                 unit_id=units.get(key),
             )
             record_dep = RecordDep(
@@ -652,7 +651,7 @@ def _resolve_present_records(*, run, dependencies, units=DEFAULT_UNITS):
 #
 #     return present_records, derived_sources
 
-def get_best_rainfall_record(
+def get_best_rainfall_intensity_record(
     *,
     run,
     view_order=None,
@@ -666,107 +665,75 @@ def get_best_rainfall_record(
     2. Best available rainfall intensity record matching known unit / phenomenon combinations
     """
 
-    if run.rain_intensity_recid is not None:
-        return run.runoffdb.load_record_by_id(run.rain_intensity_recid)
+    issues: list[DataIssue] = []
 
-    # fallback: search for any suitable rainfall intensity record
-    record = get_best_record_of_unit(
-        run=run,
-        unit_id=[RAINFALL_INTENSITY_MMH_UNIT_ID, RAINFALL_INTENSITY_MMMIN_UNIT_ID],
+    # get the best record for the unit or units list
+    return resolve_dedicated_or_generic_record(
+        owner=run,
+        dedicated_recid_attr="rain_intensity_recid",
+        unit_id=RAINFALL_INTENSITY_UNITS,
         phenomenon_id=RAINFALL_PHEN_ID,
         view_order=view_order,
+        return_trace=return_trace,
     )
-    if record and return_trace:
-        # release an issue that the rainfall record exists but the dedication is not assigned
-        issue = DataIssue(
-            reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
-            source="get_best_rainfall_record",
-            details=f"rainfall intensity record found but is not assigned as dedicated rainfall intensity record",
-        )
-        return record, issue
 
-    return record
 
 def get_rainfall_intensity_value(
     *,
-    run: Run,
-    target_unit_id: Optional[int] = None,
+    run: "Run",
+    target_unit_id: int | None = None,
     return_trace: bool = False,
-) -> Optional[object]:
-    """
-    Return representative rainfall intensity value.
-
-    Returns:
-    - float → constant rainfall
-    - "interrupted"
-    - "variable"
-    - None → unavailable / invalid
+):
     """
 
-    issue: DataIssue | None = None
+    :param run:
+    :param target_unit_id:
+    :param return_trace:
+    :return:
+    """
+    issues: list[DataIssue] = []
 
-    record, rec_issue = get_best_rainfall_record(run=run)
+    record, sub_issues = get_best_rainfall_intensity_record(
+        run=run,
+        return_trace=return_trace,
+    )
 
     if not record:
-        issue = DataIssue(
-                    reason=DataAbsenceReason.NO_RECORD,
-                    source="get_best_rainfall_record",
-                    details=f"no rainfall intensity record found for run",
-                )
-        if return_trace:
-            return None, issue
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_RECORD,
+            source="get_rainfall_intensity_value",
+            details="No rainfall intensity record found for run",
+            causes=sub_issues
+        ))
+        return (None, tuple(issues)) if return_trace else None
 
-    df, issue = get_record_data(
-        run=run,
-        record=record,
+    if sub_issues:
+        issues.extend(sub_issues)
+
+    # TODO must replace with appropriate getter for rainfall intensity (value, interrupted, variable)
+    value, sub_issues = get_record_scalar_value(
+        record=run,
         target_unit_id=target_unit_id,
-        value_label="rain_intensity",)
+        value_label="rainfall_intensity",
+        source="get_rainfall_intensity_value",
+        multi_value=False,
+        return_trace=return_trace,
+    )
 
-    if df is None:
-        return (df, issue) if return_trace else df
-    if df.empty:
-        return (df, issue) if return_trace else df
+    if sub_issues:
+        issues.extend(sub_issues)
 
-    values = df["rain_intensity"]
+    return (value, tuple(issues)) if return_trace else value
 
-    if len(values) == 2:
-        # the last value of a propper rainfall timeline is 0 (zero)
-        if values.iloc[-1] != 0:
-            issue = DataIssue(
-                reason=DataAbsenceReason.INVALID_VALUES,
-                source="get_best_rainfall_record",
-                details=f"rainfall intensity record #{record.id} has non-zero last value",
-            )
-            return (None, issue) if return_trace else None
-
-        return (values.iloc[0], None) if return_trace else values.iloc[0]
-
-    # variable / interrupted rainfall
-    zero_count = (values == 0).sum()
-
-    if zero_count > 1:
-        issue = DataIssue(
-            reason=DataAbsenceReason.INVALID_VALUES,
-            source="get_best_rainfall_record",
-            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
-        )
-        return ("interrupted", issue) if return_trace else "interrupted"
-
-    else:
-        issue = DataIssue(
-            reason=DataAbsenceReason.INVALID_VALUES,
-            source="get_best_rainfall_record",
-            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
-        )
-        return ("variable", issue) if return_trace else "variable"
 
 def get_best_sediment_concentration_record(
         *,
         run,
         view_order=None
         ):
+
     return get_best_record_of_unit(
-        run=run,
+        owner=run,
         unit_id=SS_CONCENTRATION_UNITS,
         phenomenon_id=SEDIMENT_QUANTITY_PHEN_ID,
         view_order=view_order)
@@ -777,8 +744,9 @@ def get_best_runoff_record(
         run,
         view_order=None
         ):
+
     return get_best_record_of_unit(
-        run=run,
+        owner=run,
         unit_id=RUNOFF_RATE_UNITS,
         phenomenon_id=SURFACE_RUNOFF_PHEN_ID,
         view_order=view_order)
@@ -870,3 +838,43 @@ def integrate_flow(df, value_col, duration_col, placement="start",
     adj_df['discharge'] = discharge
     adj_df['cum_discharge'] = cum_discharge
     return adj_df
+
+def get_initial_moisture_value(
+    *,
+    run: "Run",
+    multi_value: bool = False,
+    return_trace: bool = False,
+):
+    issues: list[DataIssue] = []
+
+    record, sub_issues = resolve_dedicated_or_generic_record(
+        owner=run,
+        dedicated_recid_attr="initmoist_recid",
+        unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
+        return_trace=return_trace,
+    )
+    if not record:
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_RECORD,
+            source="get_initial_moisture_value",
+            details="No initial soil moisture record found",
+            causes=sub_issues
+        ))
+        return (None, tuple(issues)) if return_trace else None
+
+    if sub_issues:
+        issues.extend(sub_issues)
+
+    value, sub_issues = get_record_scalar_value(
+        record=record,
+        target_unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
+        value_label="initial_moisture",
+        source="get_initial_moisture_value",
+        multi_value=multi_value,
+        return_trace=return_trace,
+    )
+    if sub_issues:
+        issues.extend(sub_issues)
+
+    return (value, tuple(issues)) if return_trace else value
+

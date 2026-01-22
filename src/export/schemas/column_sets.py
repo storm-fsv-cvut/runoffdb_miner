@@ -6,6 +6,7 @@ from src.utilities.utilities import czech_date
 from src.services.soil_data import *
 from src.services.hydro_data import *
 from src.services.record_resolution import *
+from src.services.crop_data import *
 from src.services.run_metadata import *
 
 from pandas import Timedelta
@@ -177,16 +178,16 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
             get_best_bulk_density_value(run=r, target_unit_id=BULK_DENSITY_GCM_UNIT_ID, return_trace=True),
     ),
 
-    # RunColumn(
-    #     header={"cz": "TTR", "en": "time to runoff"},
-    #     getter=lambda r, ctx: r.ttr,
-    # ),
-    #
-    # RunColumn(
-    #     header={"cz": "intenzita srážky [mm/h]", "en": "rainfall intensity [mm.hour-1]"},
-    #     getter=lambda r, ctx:
-    #         get_rainfall_intensity_value(run=r, target_unit_id=RAINFALL_INTENSITY_MMH_UNIT_ID, return_trace=True),
-    # ),
+    RunColumn(
+        header={"cz": "TTR", "en": "time to runoff"},
+        getter=lambda r, ctx: (r.ttr, None),
+    ),
+
+    RunColumn(
+        header={"cz": "intenzita srážky [mm/h]", "en": "rainfall intensity [mm.hour-1]"},
+        getter=lambda r, ctx:
+            get_rainfall_intensity_value(run=r, target_unit_id=RAINFALL_INTENSITY_MMH_UNIT_ID, return_trace=True),
+    ),
 ]
 
 

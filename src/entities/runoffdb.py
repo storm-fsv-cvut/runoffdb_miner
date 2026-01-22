@@ -7,6 +7,7 @@ from ..entities.run import Run
 from ..entities.record import Record
 from ..entities.measurement import Measurement
 from ..entities.soil_sample import SoilSample
+from ..entities.data_owners import MeasurementOwner, RecordOwner
 from ..entities.type_entities import *
 from ..setup.table_names import *
 import os
@@ -41,28 +42,28 @@ class RunoffDB:
         self._soil_samples_cache: dict[int: SoilSample] = {}
 
         # on initiation load all the entities that are used all the time
-        self.run_types = self.load_run_types()
-        self.crop_types = self.load_crop_types()
-        self.agrooperations = self.load_agrooperations()
-        self.operation_intensities = self.load_operation_intensities()
-        self.operation_types = self.load_operation_types()
-        self.organizations = self.load_organizations()
-        self.simulators = self.load_simulators()
-        self.localities = self.load_localities()
-        self.agrotechnologies = self.load_agrotechnologies()
-        self.units = self.load_units()
-        self.crops = self.load_crops()
-        self.protection_measures = self.load_protection_measures()
-        self.plots = self.load_plots()
-        self.samples = self.load_samples()
-        self.instruments = self.load_instruments()
-        self.processing_steps = self.load_processing_steps()
-        self.methodics = self.load_methodics()
-        self.projects = self.load_projects()
-        self.phenomena = self.load_phenomena()
-        self.record_types = self.load_record_types()
-        self.quality_index = self.load_quality_index()
-        self.assignment_types = self.load_assignment_types()
+        self.run_types = self._load_run_types()
+        self.crop_types = self._load_crop_types()
+        self.agrooperations = self._load_agrooperations()
+        self.operation_intensities = self._load_operation_intensities()
+        self.operation_types = self._load_operation_types()
+        self.organizations = self._load_organizations()
+        self.simulators = self._load_simulators()
+        self.localities = self._load_localities()
+        self.agrotechnologies = self._load_agrotechnologies()
+        self.units = self._load_units()
+        self.crops = self._load_crops()
+        self.protection_measures = self._load_protection_measures()
+        self.plots = self._load_plots()
+        self.samples = self._load_samples()
+        self.instruments = self._load_instruments()
+        self.processing_steps = self._load_processing_steps()
+        self.methodics = self._load_methodics()
+        self.projects = self._load_projects()
+        self.phenomena = self._load_phenomena()
+        self.record_types = self._load_record_types()
+        self.quality_index = self._load_quality_index()
+        self.assignment_types = self._load_assignment_types()
 
 
         print("\n... everything is ready.")
@@ -81,7 +82,7 @@ class RunoffDB:
     def get_connection(self):
         return self.engine.connect()
 
-    def fetch_all(self, sql: str, **params) -> list[dict[str, Any]]:
+    def _fetch_all(self, sql: str, **params) -> list[dict[str, Any]]:
         """
         Execute a SELECT query and return all rows as list of dicts.
         """
@@ -89,7 +90,7 @@ class RunoffDB:
             result = conn.execute(text(sql), params)
             return [dict(row._mapping) for row in result]
 
-    def fetch_one(self, sql: str, **params) -> dict[str, Any] | None:
+    def _fetch_one(self, sql: str, **params) -> dict[str, Any] | None:
         """
         Execute a SELECT query and return a single row as a dict or None.
         SQLAlchemy 1.4+ / 2.0 compatible.
@@ -183,7 +184,7 @@ class RunoffDB:
         if query.limit:
             sql += f" LIMIT {query.limit}"
 
-        results = self.fetch_all(sql)
+        results = self._fetch_all(sql)
 
 
         for row in results:
@@ -204,7 +205,7 @@ class RunoffDB:
         :return:
         """
         query = f"SELECT `run`.`id` FROM {runs_table} WHERE `run_group_id` = {run.id}"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         brothers = []
         if len(results) > 0:
@@ -215,7 +216,7 @@ class RunoffDB:
 
     def get_project_ids(self, run: Run):
         query = f"SELECT `project_id` FROM `sequence_project` WHERE `sequence_id` = {run.sequence_id}"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         ids = []
         if len(results) > 0:
@@ -223,9 +224,9 @@ class RunoffDB:
                 ids.append(r['id'])
         return ids
 
-    def load_plots(self):
+    def _load_plots(self):
 
-        results = self.fetch_all(f"SELECT * FROM {plots_table}")
+        results = self._fetch_all(f"SELECT * FROM {plots_table}")
 
         plot_dict = {}
         for r in results:
@@ -235,11 +236,11 @@ class RunoffDB:
         print(f"plots loaded ({len(plot_dict)})")
         return plot_dict
 
-    def load_samples(self):
+    def _load_samples(self):
         query = f"SELECT * FROM {soil_samples_table}"
         query += " ORDER BY `id` ASC"
 
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         samples: dict[int, SoilSample] = {}
         for row in results:
@@ -255,9 +256,9 @@ class RunoffDB:
         return samples
 
 
-    def load_simulators(self):
+    def _load_simulators(self):
         query = f"SELECT * FROM {simulators_table} ORDER BY `id` ASC"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
         simulators = {}
         for r in results:
             new = Simulator(self, **r)
@@ -265,10 +266,10 @@ class RunoffDB:
         print(f"simulators loaded ({len(simulators)})")
         return simulators
 
-    def load_organizations(self):
+    def _load_organizations(self):
         query = f"SELECT * FROM {organizations_table}"
         query += " ORDER BY `id` ASC"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         organizations = {}
         for r in results:
@@ -277,11 +278,11 @@ class RunoffDB:
         print(f"organizations loaded ({len(organizations)})")
         return organizations
 
-    def load_localities(self):
+    def _load_localities(self):
         query = f"SELECT * FROM {localities_table}"
 
         query += " ORDER BY `id` ASC"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         localities = {}
         for r in results:
@@ -290,11 +291,11 @@ class RunoffDB:
         print(f"localities loaded ({len(localities)})")
         return localities
 
-    def load_run_types(self):
+    def _load_run_types(self):
         """
         Loads all run types from the database into a dictionary keyed by run type ID.
         """
-        results = self.fetch_all(f"SELECT * FROM {run_types_table}")
+        results = self._fetch_all(f"SELECT * FROM {run_types_table}")
 
         run_types = {}
         for r in results:
@@ -307,9 +308,9 @@ class RunoffDB:
         return run_types
 
 
-    def load_crop_types(self):
+    def _load_crop_types(self):
 
-        results = self.fetch_all(f"SELECT * FROM {crop_types_table}")
+        results = self._fetch_all(f"SELECT * FROM {crop_types_table}")
 
         crop_types = {}
 
@@ -320,8 +321,8 @@ class RunoffDB:
         print(f"crop types loaded")
         return crop_types
 
-    def load_operation_types(self):
-        results = self.fetch_all(f"SELECT * FROM {operation_types_table}")
+    def _load_operation_types(self):
+        results = self._fetch_all(f"SELECT * FROM {operation_types_table}")
 
         op_types = {}
         for r in results:
@@ -330,8 +331,8 @@ class RunoffDB:
         print(f"operation types loaded")
         return op_types
 
-    def load_operation_intensities(self):
-        results = self.fetch_all(f"SELECT * FROM {operation_intensities_table}")
+    def _load_operation_intensities(self):
+        results = self._fetch_all(f"SELECT * FROM {operation_intensities_table}")
 
         op_ints = {}
         for r in results:
@@ -340,10 +341,10 @@ class RunoffDB:
         print(f"operation intensities loaded")
         return op_ints
 
-    def load_agrooperations(self):
+    def _load_agrooperations(self):
         print("\nloading tillage operations to establish agrotechnologies ...")
 
-        results = self.fetch_all(f"SELECT * FROM {operations_table}")
+        results = self._fetch_all(f"SELECT * FROM {operations_table}")
         operations = {}
         for r in results:
             new = Operation(self, **r)
@@ -355,7 +356,7 @@ class RunoffDB:
 
     def get_operation_sequence(self, agrotechnology_id):
         query = f"SELECT `operation_id`, `date` FROM {tillageseq_table} WHERE `agrotechnology_id` = {agrotechnology_id} ORDER BY `date` ASC"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         if len(results) == 0:
             print(f"\tno tillage sequence entry found for agrotechnology ID {agrotechnology_id}")
@@ -366,8 +367,8 @@ class RunoffDB:
                 sequence.update({r["date"]: self.agrooperations.get(r["operation_id"])})
             return sequence
 
-    def load_processing_steps(self):
-        results = self.fetch_all(f"SELECT * FROM {processing_step_table}")
+    def _load_processing_steps(self):
+        results = self._fetch_all(f"SELECT * FROM {processing_step_table}")
 
         steps = {}
         for r in results:
@@ -375,8 +376,8 @@ class RunoffDB:
             steps.update({new.id: new})
         return steps
 
-    def load_instruments(self):
-        results = self.fetch_all(f"SELECT * FROM {instruments_table}")
+    def _load_instruments(self):
+        results = self._fetch_all(f"SELECT * FROM {instruments_table}")
 
         instruments = {}
         for r in results:
@@ -386,7 +387,7 @@ class RunoffDB:
 
     def get_processing_steps_sequence(self, methodics_id):
         query = f"SELECT `processing_step_id`, `sort` FROM {methodics_processing_step_table} WHERE `methodics_id` = {methodics_id}"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         if len(results) == 0:
             print(f"\tno processing steps found for methodics ID {methodics_id}")
@@ -399,7 +400,7 @@ class RunoffDB:
 
     def get_instruments(self, step_id):
         query = f"SELECT `instrument_id` FROM {processing_step_instrument_table} WHERE `processing_step_id` = {step_id}"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         instruments = []
         for r in results:
@@ -407,8 +408,8 @@ class RunoffDB:
         return instruments
 
 
-    def load_protection_measures(self):
-        results = self.fetch_all(f"SELECT * FROM {protection_measures_table}")
+    def _load_protection_measures(self):
+        results = self._fetch_all(f"SELECT * FROM {protection_measures_table}")
 
         out_dict = {}
         for r in results:
@@ -419,7 +420,7 @@ class RunoffDB:
 
     def get_protection_measures(self, plot_id):
         query = f"SELECT `protection_measure_id` FROM {plot_protection_measures_table} WHERE `plot_id` = {plot_id}"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         ids = []
         measures = []
@@ -433,13 +434,13 @@ class RunoffDB:
     def get_last_run_on_plot_datetime(self, plot: Plot):
         query = f"SELECT max(`datetime`) FROM `run_group` JOIN `run` ON `run`.`run_group_id` = `run_group`.`id` " \
                 f"WHERE `run`.`plot_id` = {plot.id}"
-        result = self.fetch_one(query)
+        result = self._fetch_one(query)
 
         return result or None
 
-    def get_runs_on_plot(self, plot: Plot):
+    def get_runs_on_plot(self, plot: Plot) -> list[int]:
         query = f"SELECT `id` FROM `run` WHERE `plot_id` = {plot.id}"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
         if len(results) > 0:
             run_list = []
             for res in results:
@@ -447,8 +448,8 @@ class RunoffDB:
             return run_list
         return []
 
-    def load_units(self):
-        results = self.fetch_all(f"SELECT * FROM {units_table}")
+    def _load_units(self):
+        results = self._fetch_all(f"SELECT * FROM {units_table}")
         units = {}
         for r in results:
             new_unit = Unit(**r)
@@ -456,8 +457,8 @@ class RunoffDB:
         print(f"units loaded ({len(units)})")
         return units
 
-    def load_projects(self):
-        results = self.fetch_all(f"SELECT * FROM {projects_table}")
+    def _load_projects(self):
+        results = self._fetch_all(f"SELECT * FROM {projects_table}")
         projects = {}
         for r in results:
             new_project = Project(**r)
@@ -465,8 +466,8 @@ class RunoffDB:
         print(f"projects loaded")
         return projects
 
-    def load_crops(self):
-        results = self.fetch_all(f"SELECT * FROM {crops_table}")
+    def _load_crops(self):
+        results = self._fetch_all(f"SELECT * FROM {crops_table}")
         crops = {}
         for r in results:
             new_crop = Crop(self, **r)
@@ -474,8 +475,8 @@ class RunoffDB:
         print(f"crops loaded ({len(crops)})")
         return crops
 
-    def load_agrotechnologies(self):
-        results = self.fetch_all(f"SELECT * FROM {agrotechnologies_table}")
+    def _load_agrotechnologies(self):
+        results = self._fetch_all(f"SELECT * FROM {agrotechnologies_table}")
         agrotechnologies = {}
         for r in results:
             new_agt = Agrotechnology(self, **r)
@@ -483,8 +484,8 @@ class RunoffDB:
         print(f"agrotechnologies loaded ({len(agrotechnologies)})")
         return agrotechnologies
 
-    def load_phenomena(self):
-        results = self.fetch_all(f"SELECT * FROM {phenomena_table}")
+    def _load_phenomena(self):
+        results = self._fetch_all(f"SELECT * FROM {phenomena_table}")
         phenomena = {}
         for r in results:
             new = Phenomenon(**r)
@@ -492,8 +493,8 @@ class RunoffDB:
         print(f"phenomena loaded")
         return phenomena
 
-    def load_record_types(self):
-        results = self.fetch_all(f"SELECT * FROM {record_types_table}")
+    def _load_record_types(self):
+        results = self._fetch_all(f"SELECT * FROM {record_types_table}")
         record_types = {}
         for r in results:
             new = RecordType(**r)
@@ -501,8 +502,8 @@ class RunoffDB:
         print(f"record types loaded")
         return record_types
 
-    def load_quality_index(self):
-        results = self.fetch_all(f"SELECT * FROM {quality_index_table}")
+    def _load_quality_index(self):
+        results = self._fetch_all(f"SELECT * FROM {quality_index_table}")
         quality_indices = {}
         for r in results:
             new = QualityIndex(**r)
@@ -510,8 +511,8 @@ class RunoffDB:
         print(f"quality indexes loaded")
         return quality_indices
 
-    def load_assignment_types(self):
-        results = self.fetch_all(f"SELECT * FROM {assignmenttypes_table}")
+    def _load_assignment_types(self):
+        results = self._fetch_all(f"SELECT * FROM {assignmenttypes_table}")
 
         ats = {}
         for r in results:
@@ -520,8 +521,8 @@ class RunoffDB:
         print(f"assignment types loaded")
         return ats
 
-    def load_methodics(self):
-        results = self.fetch_all(f"SELECT * FROM {methodics_table}")
+    def _load_methodics(self):
+        results = self._fetch_all(f"SELECT * FROM {methodics_table}")
         methodics = {}
         for r in results:
             new = Method(self, **r)
@@ -529,12 +530,50 @@ class RunoffDB:
         print(f"methodics loaded ({len(methodics)})")
         return methodics
 
-    def load_measurements_of_run(self, run: Run):
+    def get_soil_samples_of_run(self, run: "Run") -> list["SoilSample"]:
+        """
+        Return all SoilSample instances directly associated with the given run.
+        """
+        if run is None or run.id is None:
+            return []
+
+        rid = run.id
+
+        # fast path: filter already-loaded samples
+        out = [
+            sample
+            for sample in self.samples.values()
+            if sample.run_id == rid and not sample.deleted
+        ]
+
+        return out
+
+    def load_measurements(self, owner: MeasurementOwner) -> dict[int, "Measurement"]:
+        if isinstance(owner, Run):
+            return self._load_measurements_of_run(owner)
+        elif isinstance(owner, SoilSample):
+            return self._load_measurements_of_soil_sample(owner)
+        else:
+            raise TypeError(f"Unsupported measurement owner: {type(owner)}")
+
+    def _load_measurements_of_run(self, run: Run):
         msrmsnts = {}
         query = f"SELECT * FROM {measurements_table} " \
                 f"JOIN {measurement_run_table} ON {measurement_run_table}.`measurement_id` = {measurements_table}.`id` " \
                 f"WHERE {measurement_run_table}.`run_id` = {run.id}"
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
+
+        for res in results:
+            new_measurement = Measurement(self, **res)
+            msrmsnts.update({new_measurement.id: new_measurement})
+        return msrmsnts
+
+    def _load_measurements_of_soil_sample(self, sample: SoilSample):
+        msrmsnts = {}
+        query = f"SELECT * FROM {measurements_table} " \
+                f"JOIN {measurement_soil_sample_table} ON {measurement_soil_sample_table}.`measurement_id` = {measurements_table}.`id` " \
+                f"WHERE {measurement_soil_sample_table}.`soil_sample_id` = {sample.id}"
+        results = self._fetch_all(query)
 
         for res in results:
             new_measurement = Measurement(self, **res)
@@ -547,7 +586,7 @@ class RunoffDB:
                 f"JOIN {measurements_table} ON {measurements_table}.`id` = {records_table}.`measurement_id` " \
                 f"WHERE {records_table}.`id` = {record_id}"
 
-        results = self.fetch_one(query)
+        results = self._fetch_one(query)
 
         if len(results) > 0:
             return Record(self, **results)
@@ -573,7 +612,7 @@ class RunoffDB:
             WHERE r.`measurement_id` = {measurement.id}
             GROUP BY r.`id`
         """
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         if len(results) == 0:
             return []
@@ -590,17 +629,30 @@ class RunoffDB:
                 rcrds.append(new)
             return rcrds
 
+
     def load_record_data(
             self,
             record: Record,
             *,
-            value_label="value",
-            related_x_label="rel_value_x",
-            related_y_label="rel_value_y",
-            related_z_label="rel_value_z",
-            index_column=None,
-            order_by=None,
+            value_label: str = "value",
+            related_x_label: str = "rel_value_x",
+            related_y_label: str = "rel_value_y",
+            related_z_label: str = "rel_value_z",
+            index_column: str | None = None,
+            order_by: str | None = None,
     ):
+        """
+        Central gate to load data of a record from database to pandas DataFrame
+
+        :param record: Record instance to retrieve data from
+        :param value_label: label that will be assigned to the 1st order value
+        :param related_x_label: label that will be assigned to the 2nd order value
+        :param related_y_label: label that will be assigned to the 3rd order value
+        :param related_z_label: label that will be assigned to the 4th order value
+        :param index_column: column label to use as index (timeline records are assigned 'time' column implicitly)
+        :param order_by: database name of a column to use for sorting
+        :return:
+        """
         import pandas as pd
         from sqlalchemy import text
 
@@ -673,7 +725,7 @@ class RunoffDB:
         # end of the query
         query += " ORDER BY `datetime` ASC"
 
-        results = self.fetch_all(query)
+        results = self._fetch_all(query)
 
         sim_days = []
         if len(results) > 0:

@@ -5,11 +5,12 @@ from ..setup.table_names import *
 
 from ..utilities.utilities import *
 from ..run_filter import RunFilter
-from ..entities.measurement import Measurement
+from ..entities.soil_sample import SoilSample
+from ..entities.data_owners import MeasurementOwner, RecordOwner
 
 from src.services.record_resolution import get_best_record_of_unit
 
-class Run:
+class Run(MeasurementOwner, RecordOwner):
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
 
@@ -107,74 +108,12 @@ class Run:
             ref_run = list(ref_runs.values())[0]
             return ref_run
 
-    def get_records(self, unit_id=None,
-                    phenomenon_id=None,
-                    record_type_id=None,
-                    related_value_x_unit_id=None,
-                    related_value_y_unit_id=None,
-                    related_value_z_unit_id=None,
-                    exclude_missing_records=False):
 
-        out = []
-        # get the measurements related to Run instance, pass on the argument
-        measurements = self.get_measurements(phenomenon_id)
-        # if any measurements like that exist
-        if measurements:
-            for meas in measurements:
-                # load the records of measurement, pass on the arguments
-                # records of all unit IDs are in the obtained list if unit is a list
-                recs = meas.get_records(unit_id, record_type_id, related_value_x_unit_id, related_value_y_unit_id, related_value_z_unit_id, exclude_missing_records)
-
-                # if any records like that exist
-                if recs:
-                    out.extend(recs)
-
-            # return None if the out list is empty
-            return out or None
-        else:
-            return None
-
-    def get_measurements(self, phenomenon_id=None):
-        if self.measurements:
-            out = []
-            for meas in self.measurements.values():
-                if phenomenon_id is None:
-                    out.append(meas)
-                # if the phenomenon id is limited by the argument
-                else:
-                    if meas.phenomenon_id == phenomenon_id:
-                        out.append(meas)
-            if len(out) == 0:
-                return None
-            else:
-                return out
-        else:
-            # the measurements are not loaded yet, try loading them
-            self.measurements = self.runoffdb.load_measurements_of_run(self)
-            if self.measurements:
-                return self.get_measurements(phenomenon_id)
-            else:
-                return None
-
-    def get_terminal_velocity_value(self, time=None, record_type=None):
-        found_records = self.get_records([15], 5, record_type_id=record_type)
-        if found_records:
-            if len(found_records) > 0:
-                # check if found records have same type -
-                first = found_records[0].record_type_id
-                for rec in found_records:
-                    if rec.record_type_id != first:
-                        print("Records of more types were found. Specify record type for unambiguous results.")
-
-                for rec in found_records:
-                    data = rec.load_data("plot_x", index_column="plot_x")
-
-                    print(data[data['plot_x'] == data['plot_x'].max()])
-
-                    print(data)
-        else:
-            return None
-        return
+    def get_soil_samples(self) -> list[SoilSample]:
+        """
+        Return all soil samples directly associated with this run.
+        """
+        return self.runoffdb.get_samples_of_run(self)
 
     def get_metadata(self, lang="en"):
         meta = {}

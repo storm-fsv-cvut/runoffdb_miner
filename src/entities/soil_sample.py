@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
+from ..entities.data_owners import MeasurementOwner, RecordOwner
 
-class SoilSample:
+
+class SoilSample(MeasurementOwner, RecordOwner):
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
         self.id = kwargs.get("id")
@@ -30,4 +32,3 @@ class SoilSample:
         self.user_id = kwargs.get("user_id")
 
         self.description = {"cz": self.description_cz, "en": self.description_en}
-

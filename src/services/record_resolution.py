@@ -2,25 +2,16 @@ from .unit_conversion import convert_dataframe_units, UnitConversionError
 from src.setup.unit_ids import *
 from src.setup.entity_ids import *
 
+from src.entities.data_owners import RecordOwner
 from src.diagnostics.absence_reasons import DataAbsenceReason
 from src.diagnostics.trace import DataIssue
-from ..utilities.utilities import remove_last_zero_row
+from src.utilities.utilities import remove_last_zero_row
+from src.services.record_type_priorities import DEFAULT_RECORD_TYPE_PRIORITY
 
-DEFAULT_RECORD_TYPE_PRIORITY = [
-    2,  # edited data
-    1,  # raw data
-    3,  # homogenized edited data
-    4,  # homogenized raw data
-    6,  # derived data
-    7,  # estimated
-    8,  # rough estimate
-    5,  # set value
-]
-# services/record_resolution.py
 
 def get_best_record_of_unit(
     *,
-    run,
+    owner: RecordOwner,
     unit_id,
     phenomenon_id=None,
     view_order=None,
@@ -35,7 +26,7 @@ def get_best_record_of_unit(
     view_order = view_order or DEFAULT_RECORD_TYPE_PRIORITY
 
     for record_type in view_order:
-        records = run.get_records(
+        records = owner.get_records(
             unit_id,
             phenomenon_id,
             record_type,
@@ -48,7 +39,7 @@ def get_best_record_of_unit(
             continue
 
         # quality index priority: lowest first, None last
-        for qi in run.runoffdb.get_all_quality_indexes() + [None]:
+        for qi in owner.runoffdb.get_all_quality_indexes() + [None]:
             matches = [r for r in records if r.quality_index_id == qi]
             if matches:
                 return matches[0]
@@ -57,12 +48,11 @@ def get_best_record_of_unit(
 
 def resolve_dedicated_or_generic_record(
     *,
-    run: "Run",
+    owner: RecordOwner,
     dedicated_recid_attr: str | None,
     unit_id: int | list[int],
     phenomenon_id: int | None = None,
     view_order: list[int] | None = None,
-    source: str,
     return_trace: bool = False,
 ):
     """
@@ -81,15 +71,15 @@ def resolve_dedicated_or_generic_record(
 
     # 1. dedicated record path
     if dedicated_recid_attr:
-        rec_id = getattr(run, dedicated_recid_attr, None)
+        rec_id = getattr(owner, dedicated_recid_attr, None)
         if rec_id:
-            record = run.runoffdb.load_record_by_id(rec_id)
+            record = owner.runoffdb.load_record_by_id(rec_id)
             if record:
                 return (record, None) if return_trace else record
             else:
                 issues.append(DataIssue(
                     reason=DataAbsenceReason.RECORD_NOT_FOUND,
-                    source=source,
+                    source="resolve_dedicated_or_generic_record",
                     details=(
                         f"run.{dedicated_recid_attr}={rec_id} "
                         "but record was not found - database inconsistency"
@@ -99,14 +89,14 @@ def resolve_dedicated_or_generic_record(
         else:
             issues.append(DataIssue(
                 reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
-                source=source,
+                source="resolve_dedicated_or_generic_record",
                 details=(
                     f"'{dedicated_recid_attr}' dedicated record not set"
                 ),
             ))
     # 2. generic fallback
     record = get_best_record_of_unit(
-        run=run,
+        owner=owner,
         unit_id=unit_id,
         phenomenon_id=phenomenon_id,
         view_order=view_order,
@@ -116,7 +106,7 @@ def resolve_dedicated_or_generic_record(
         if dedicated_recid_attr:
             issues.append(DataIssue(
                 reason=DataAbsenceReason.DEDICATION_MISSING,
-                source=source,
+                source="resolve_dedicated_or_generic_record",
                 details=(
                     f"generic record used because run.{dedicated_recid_attr} is not set"
                 ),
@@ -129,7 +119,7 @@ def resolve_dedicated_or_generic_record(
     details += f" and phenomenon ID = {phenomenon_id}" if phenomenon_id else ''
     issues.append(DataIssue(
         reason=DataAbsenceReason.NO_RECORD,
-        source=source,
+        source="resolve_dedicated_or_generic_record",
         details=details
         ),
     )
@@ -138,7 +128,6 @@ def resolve_dedicated_or_generic_record(
 
 def get_record_data(
     *,
-    run,
     record,
     value_label,
     related_x_label=None,
@@ -220,14 +209,10 @@ def get_record_data(
 
 def get_record_scalar_value(
     *,
-    run: "Run",
-    unit_id: int | list[int] | None,
+    record: "Record",
     value_label: str,
     source: str,
-    phenomenon_id: int | None = None,
     target_unit_id: int | None = None,
-    view_order: list[int] | None = None,
-    dedicated_recid_attr: str | None = None,
     multi_value: bool = False,
     return_trace: bool = False,
 ):
@@ -239,29 +224,10 @@ def get_record_scalar_value(
     - phenomenon filtering
     - optional unit conversion
     """
-
     issues: list[DataIssue] = []
-
-    # get the best record for the unit or units list
-    record, rec_issues = resolve_dedicated_or_generic_record(
-        run=run,
-        dedicated_recid_attr=dedicated_recid_attr,
-        unit_id=unit_id,
-        phenomenon_id=phenomenon_id,
-        view_order=view_order,
-        source=source,
-        return_trace=return_trace,
-    )
-
-    if rec_issues:
-        issues.extend(rec_issues)
-
-    if not record:
-        return (None, tuple(issues)) if return_trace else None
 
     # load data
     df, sub_issue = get_record_data(
-        run=run,
         record=record,
         value_label=value_label,
         related_x_label=None,
@@ -308,204 +274,61 @@ def get_record_scalar_value(
         tuple(issues),
     ) if return_trace else values.mean()
 
-#
-# def get_best_initial_moisture_record(*, run, view_order=None):
-#     """
-#     Returns the best initial soil moisture record for a run.
-#     Preference:
-#       1) dedicated record assigned to the run
-#       2) fallback via get_best_record_of_unit
-#     """
-#
-#     if run.initmoist_recid:
-#         return run.runoffdb.load_record_by_id(run.initmoist_recid)
-#
-#     return get_best_record_of_unit(
-#         run=run,
-#         unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
-#         phenomenon_id=SOIL_MOISTURE_PHEN_ID,
-#         view_order=view_order,
-#     )
-
-
-def get_crop_height_value(
+def record_matches_units(
+    record,
     *,
-    run: "Run",
-    multi_value: bool = False,
-    return_trace: bool = False,
-):
-    # for the cultivated fallow always return None
-    if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
-        issue = (DataIssue(
-            reason=DataAbsenceReason.INVALID_REQUEST,
-            source="get_crop_height_value",
-            details=f"crop height irrelevant for 'cultivated fallow'",
-        ),)
-        return (None, issue) if return_trace else None
+    allowed_unit_ids: int | list[int],
+    include_related: bool = True,
+) -> bool:
+    """
+    Check whether a record matches allowed units.
 
-    return get_record_scalar_value(
-        run=run,
-        unit_id=CROP_HEIGHT_UNITS,
-        target_unit_id=CROP_HEIGHT_CM_UNIT_ID,
-        value_label="crop_height",
-        source="get_crop_height_value",
-        multi_value=multi_value,
-        return_trace=return_trace,
-    )
-#
-# def get_initial_moisture_value(
-#     *,
-#     run,
-#     view_order=None,
-#     multi_value=False,
-# ):
-#     """
-#     Returns initial soil moisture value(s) for a run.
-#
-#     - If a single value exists → returns scalar
-#     - If multiple values exist:
-#         - multi_value=True  → returns list
-#         - multi_value=False → returns mean
-#     """
-#
-#     record = get_best_initial_moisture_record(
-#         run=run,
-#         view_order=view_order,
-#     )
-#
-#     if record is None:
-#         return None
-#     data = record.get_data(value_label="initial_moisture")
-#
-#     if data is None:
-#         return None
-#
-#     values = data["initial_moisture"]
-#
-#     if len(values.index) == 1:
-#         return values.iloc[0]
-#
-#     if multi_value:
-#         return values.tolist()
-#
-#     return values.mean()
-#
-# def get_best_surface_cover_record(*, run, return_trace: bool = False):
-#     """
-#     Resolves the best surface cover record for a run.
-#
-#     Resolution order:
-#     1. dedicated surface cover record assigned to the run
-#     2. best available generic surface cover record
-#     """
-#
-#     issues: list[DataIssue] = []
-#
-#     # 1. dedicated record
-#     rec_id = run.surface_cover_recid
-#     if rec_id:
-#         record = run.runoffdb.load_record_by_id(rec_id)
-#         if record:
-#             return (record, None) if return_trace else record
-#         else:
-#             issues.append(DataIssue(
-#                             reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
-#                             source="get_best_surface_cover_record",
-#                             details=f"dedicated surface cover record not set",
-#                         )
-#                     )
-#             return (None, issues) if return_trace else None
-#     else:
-#         # 2. fallback: try to get any surface cover record
-#         record = get_best_record_of_unit(
-#             run=run,
-#             unit_id=SURFACE_COVER_PERC_UNIT_ID,
-#         )
-#
-#     if record:
-#         issues.append(DataIssue(
-#                 reason=DataAbsenceReason.DEDICATION_MISSING,
-#                 source="get_best_surface_cover_record",
-#                 details=f"surface cover record found, but is not set as 'dedicated'",
-#             )
-#         )
-#         return (record, issues) if return_trace else record
-#
-#     # fallback also failed
-#     issues.append(DataIssue(
-#                     reason=DataAbsenceReason.NO_RECORD,
-#                     source="get_best_surface_cover_record",
-#                     details=f"no surface cover record found",
-#                     )
-#                 )
-#
-#     return (None, tuple(issues)) if return_trace else None
+    A match occurs if any of the record's unit attributes
+    equals one of the allowed unit IDs.
 
-def get_surface_cover_value(
-    *,
-    run: "Run",
-    multi_value: bool = False,
-    return_trace: bool = False,
-):
-    # for the cultivated fallow always return None
-    if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
-        issue = (DataIssue(
-            reason=DataAbsenceReason.INVALID_REQUEST,
-            source="get_surface_cover_value",
-            details=f"surface cover irrelevant for 'cultivated fallow'",
-        ),)
-        return (0, issue) if return_trace else 0
+    Checked attributes:
+    - record.unit_id
+    - record.related_value_x_unit_id
+    - record.related_value_y_unit_id
+    - record.related_value_z_unit_id
 
-    return get_record_scalar_value(
-        run=run,
-        unit_id=SURFACE_COVER_PERC_UNIT_ID,
-        dedicated_recid_attr="surface_cover_recid",
-        target_unit_id=SURFACE_COVER_PERC_UNIT_ID,
-        value_label="surface_cover",
-        source="get_surface_cover_value",
-        multi_value=multi_value,
-        return_trace=return_trace,
-    )
+    Parameters
+    ----------
+    record
+        Record instance to be checked.
+    allowed_unit_ids
+        Single unit ID or list of acceptable unit IDs.
+    include_related
+        Whether to consider related X/Y/Z unit IDs.
 
-def get_initial_moisture_value(
-    *,
-    run: "Run",
-    multi_value: bool = False,
-    return_trace: bool = False,
-):
+    Returns
+    -------
+    bool
+        True if record matches at least one allowed unit.
+    """
 
-    return get_record_scalar_value(
-        run=run,
-        unit_id=SURFACE_COVER_PERC_UNIT_ID,
-        dedicated_recid_attr="initmoist_recid",
-        target_unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
-        value_label="initial_moisture",
-        source="get_initial_moisture_value",
-        multi_value=multi_value,
-        return_trace=return_trace,
-    )
+    if record is None:
+        return False
 
+    if not isinstance(allowed_unit_ids, (list, tuple, set)):
+        allowed = {allowed_unit_ids}
+    else:
+        allowed = set(allowed_unit_ids)
 
-def get_plant_density_value(
-    *,
-    run: "Run",
-    multi_value: bool = False,
-    return_trace: bool = False,
-):
-    # for the cultivated fallow always return None
-    if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
-        issue = (DataIssue(
-            reason=DataAbsenceReason.INVALID_REQUEST,
-            source="get_plant_density_value",
-            details=f"plant density irrelevant for 'cultivated fallow'",
-        ),)
-        return (None, issue) if return_trace else None
+    # main unit
+    if getattr(record, "unit_id", None) in allowed:
+        return True
 
-    return get_record_scalar_value(
-        run=run,
-        unit_id=CROP_DENSITY_M_2_UNIT_ID,
-        value_label="crop_density",
-        source="get_plant_density_value",
-        multi_value=multi_value,
-        return_trace=return_trace,
-    )
+    if not include_related:
+        return False
+
+    # related units
+    for attr in (
+        "related_value_x_unit_id",
+        "related_value_y_unit_id",
+        "related_value_z_unit_id",
+    ):
+        if getattr(record, attr, None) in allowed:
+            return True
+
+    return False
