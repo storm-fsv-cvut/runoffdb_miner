@@ -27,5 +27,6 @@ class DataAbsenceReason(Enum):
     INVALID_REQUEST = auto()  # requested value does not make sense in given context
     IMPLICIT_VALUE = auto() # the value was not derived from DB values but was casted an implicit value
     DERIVED_MEAN = auto()
+    INCOMPATIBLE_UNIT_SET = auto()
 
     UNKNOWN = auto()
