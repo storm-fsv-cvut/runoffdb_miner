@@ -751,6 +751,45 @@ def get_best_runoff_record(
         phenomenon_id=SURFACE_RUNOFF_PHEN_ID,
         view_order=view_order)
 
+def get_initial_moisture_value(
+    *,
+    run: "Run",
+    multi_value: bool = False,
+    return_trace: bool = False,
+):
+    issues: list[DataIssue] = []
+
+    record, sub_issues = resolve_dedicated_or_generic_record(
+        owner=run,
+        dedicated_recid_attr="initmoist_recid",
+        unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
+        return_trace=return_trace,
+    )
+    if not record:
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_RECORD,
+            source="get_initial_moisture_value",
+            details="No initial soil moisture record found",
+            causes=sub_issues
+        ))
+        return (None, tuple(issues)) if return_trace else None
+
+    if sub_issues:
+        issues.extend(sub_issues)
+
+    value, sub_issues = get_record_scalar_value(
+        record=record,
+        target_unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
+        value_label="initial_moisture",
+        source="get_initial_moisture_value",
+        multi_value=multi_value,
+        return_trace=return_trace,
+    )
+    if sub_issues:
+        issues.extend(sub_issues)
+
+    return (value, tuple(issues)) if return_trace else value
+
 
 
 def _adjust_end_time(merged_data, kwargs):
@@ -838,43 +877,4 @@ def integrate_flow(df, value_col, duration_col, placement="start",
     adj_df['discharge'] = discharge
     adj_df['cum_discharge'] = cum_discharge
     return adj_df
-
-def get_initial_moisture_value(
-    *,
-    run: "Run",
-    multi_value: bool = False,
-    return_trace: bool = False,
-):
-    issues: list[DataIssue] = []
-
-    record, sub_issues = resolve_dedicated_or_generic_record(
-        owner=run,
-        dedicated_recid_attr="initmoist_recid",
-        unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
-        return_trace=return_trace,
-    )
-    if not record:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_initial_moisture_value",
-            details="No initial soil moisture record found",
-            causes=sub_issues
-        ))
-        return (None, tuple(issues)) if return_trace else None
-
-    if sub_issues:
-        issues.extend(sub_issues)
-
-    value, sub_issues = get_record_scalar_value(
-        record=record,
-        target_unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
-        value_label="initial_moisture",
-        source="get_initial_moisture_value",
-        multi_value=multi_value,
-        return_trace=return_trace,
-    )
-    if sub_issues:
-        issues.extend(sub_issues)
-
-    return (value, tuple(issues)) if return_trace else value
 

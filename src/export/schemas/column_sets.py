@@ -16,19 +16,21 @@ WRB_FRACTION_LIMITS = [0.002, 0.063, 2]
 
 def _soil_texture_value(limit):
     def getter(run, ctx):
-        df = get_best_soil_texture_data(
+        df, issues = get_best_soil_texture_data(
             run=run,
             x_label="cumulative_mass_content",
             y_label="particle_size",
             limits=WRB_FRACTION_LIMITS,
+            return_trace=True,
         )
 
         if df is None or limit not in df.index:
-            return ctx["no_data_value"]
+            return ctx["no_data_value"], issues
 
-        return df.loc[limit, "cumulative_mass_content"]
+        return df.loc[limit, "cumulative_mass_content"], issues
 
     return getter
+
 
 
 RUN_INFO_COLUMNS: list[RunColumn] = [
@@ -155,22 +157,22 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
         getter=lambda r, ctx:
             get_initial_moisture_value(run=r, multi_value=False, return_trace=True),
     ),
-    #
-    # # --- soil texture fractions ---
-    # RunColumn(
-    #     header={"cz": "<0, 0.002mm>", "en": "<0, 0.002mm>"},
-    #     getter=_soil_texture_value(0.002),
-    # ),
-    #
-    # RunColumn(
-    #     header={"cz": "<0.002, 0.063mm>", "en": "<0.002, 0.063mm>"},
-    #     getter=_soil_texture_value(0.063),
-    # ),
-    #
-    # RunColumn(
-    #     header={"cz": "<0.063, 2mm>", "en": "<0.063, 2mm>"},
-    #     getter=_soil_texture_value(2),
-    # ),
+
+    # --- soil texture fractions ---
+    RunColumn(
+        header={"cz": "<0, 0.002mm>", "en": "<0, 0.002mm>"},
+        getter=_soil_texture_value(0.002),
+    ),
+
+    RunColumn(
+        header={"cz": "<0.002, 0.063mm>", "en": "<0.002, 0.063mm>"},
+        getter=_soil_texture_value(0.063),
+    ),
+
+    RunColumn(
+        header={"cz": "<0.063, 2mm>", "en": "<0.063, 2mm>"},
+        getter=_soil_texture_value(2),
+    ),
 
     RunColumn(
         header={"cz": "objemová hmotnost [g/cm3]", "en": "bulk density [g.cm-3]"},

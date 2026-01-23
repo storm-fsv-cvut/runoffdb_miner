@@ -233,7 +233,7 @@ def get_best_soil_texture_data(
             return_cumulative=return_cumulative,
         )
 
-    return df
+    return (df, None) if return_trace else df
 
 
 def get_best_bulk_density_value(

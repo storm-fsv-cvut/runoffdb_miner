@@ -17,6 +17,16 @@ class DataTrace:
     category: str
     level: str
 
+    def identity(self) -> tuple:
+        return (
+            self.category,
+            self.level,
+            tuple(
+                (i.reason, i.source, i.details)
+                for i in self.issues
+            ),
+        )
+
 # service functions
 def serialize_issue(issue: DataIssue) -> dict:
     return {

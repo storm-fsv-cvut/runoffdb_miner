@@ -8,16 +8,31 @@ class TraceCollector:
 
     def __init__(self):
         self._traces: list[dict] = []
+        self._seen_traces: set[tuple] = set()
+
+    # def add(self, *, run_id, dataset, trace: DataTrace):
+    #     """
+    #     Add a single trace entry.
+    #     """
+    #     self._traces.append({
+    #         "run_id": run_id,
+    #         "dataset": dataset,
+    #         **serialize_trace(trace),
+    #     })
 
     def add(self, *, run_id, dataset, trace: DataTrace):
-        """
-        Add a single trace entry.
-        """
+        key = (run_id, dataset, trace.identity())
+
+        if key in self._seen_traces:
+            return
+
+        self._seen_traces.add(key)
         self._traces.append({
             "run_id": run_id,
             "dataset": dataset,
             **serialize_trace(trace),
         })
+
     def __iter__(self) -> Iterable[dict]:
         return iter(self._traces)
 
