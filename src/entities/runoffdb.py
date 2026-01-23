@@ -548,6 +548,13 @@ class RunoffDB:
 
         return out
 
+    def get_soil_samples_by_id(self, ss_id: int) -> "SoilSample":
+        """
+        Return single SoilSample instances with given ID or None.
+        """
+
+        return self.samples.get(ss_id)
+
     def load_measurements(self, owner: MeasurementOwner) -> dict[int, "Measurement"]:
         if isinstance(owner, Run):
             return self._load_measurements_of_run(owner)

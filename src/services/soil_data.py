@@ -44,18 +44,16 @@ def get_best_soil_dedicated_record(
     # --------------------------------------------------
     # 1. dedicated soil sample path
     # --------------------------------------------------
-    ss = getattr(run, dedicated_ss_attr, None)
+    ss_id = getattr(run, dedicated_ss_attr, None)
 
-    if ss is not None:
-
+    if ss_id is not None:
+        ss = run.runoffdb.get_soil_samples_by_id(ss_id)
         # 1.a invalid soil sample reference
         if not isinstance(ss, SoilSample):
             issues.append(DataIssue(
                 reason=DataAbsenceReason.DATABASE_RECORD_INVALID,
                 source="get_best_soil_dedicated_record",
-                details=(
-                    f"run.{dedicated_ss_attr} references a non-existent SoilSample ID {ss}"
-                ),
+                details=f"run.{dedicated_ss_attr} references a non-existent SoilSample ID {ss_id}",
             ))
             return (None, tuple(issues)) if return_trace else None
 
@@ -66,7 +64,7 @@ def get_best_soil_dedicated_record(
                 reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
                 source="get_best_soil_dedicated_record",
                 details=(
-                    f"dedicated SoilSample '{dedicated_ss_attr}' does not have appropriate dedicated record assigned"
+                    f"dedicated SoilSample '{dedicated_ss_attr}' ID {ss_id} does not have appropriate dedicated record assigned"
                     f"(attribute {dedicated_rec_attr})"
                 ),
             ))
@@ -124,7 +122,8 @@ def get_best_soil_dedicated_record(
     samples = run.runoffdb.get_soil_samples_of_run(run)
 
     for ss in samples:
-        record = ss.get_best_record_of_unit(
+        record = get_best_record_of_unit(
+            owner=ss,
             unit_id=allowed_units,
             phenomenon_id=phenomenon_id,
         )
@@ -161,13 +160,13 @@ def get_best_soil_texture_record(
 ):
     return get_best_soil_dedicated_record(
         run=run,
-        dedicated_ss_attr="texture_ss",
-        dedicated_rec_attr="texture_recid",
+        dedicated_ss_attr="texture_ss_id",
+        dedicated_rec_attr="texture_record_id",
         allowed_units=[
             CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID,
             PARTICLE_SIZE_THRESHOLD_MM_UNIT_ID,
         ],
-        phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
+        phenomenon_id=PARTICLE_SIZE_DISTRIBUTION_PHEN_ID,
         return_trace=return_trace,
     )
 
@@ -211,7 +210,7 @@ def get_best_soil_texture_data(
 
     df = texture_record.get_data(
         value_label=x_label,
-        related_x=y_label,
+        related_x_label=y_label,
         index_column=y_label,
         order_by=order_by,
     )

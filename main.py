@@ -32,7 +32,9 @@ if __name__ == '__main__':
                        crops=None,
                        with_runoff_only=False)
 
-    with Miner(filter_MDS) as miner:
+    filter_Puclice = RunFilter(localities=8)
+
+    with Miner(filter_Puclice) as miner:
 
         # miner.agrotechnologies_overview()
         generate_interval_values_csv(miner,

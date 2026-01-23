@@ -712,7 +712,7 @@ def get_rainfall_intensity_value(
 
     # TODO must replace with appropriate getter for rainfall intensity (value, interrupted, variable)
     value, sub_issues = get_record_scalar_value(
-        record=run,
+        record=record,
         target_unit_id=target_unit_id,
         value_label="rainfall_intensity",
         source="get_rainfall_intensity_value",
