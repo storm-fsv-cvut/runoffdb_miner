@@ -313,6 +313,9 @@ def get_best_hydro_data(
     - None is never returned
     """
 
+    # ------------------------------------------------------------------
+    # 0. Normalize inputs
+    # ------------------------------------------------------------------
     labels_map = labels_map or {}
     request_map = request_map or {}
     interpolation_map = interpolation_map or {}
@@ -326,18 +329,37 @@ def get_best_hydro_data(
     trace: DataTrace | None = None
 
     # ------------------------------------------------------------------
-    # Resolve dependencies (role-aware)
+    # 1. Resolve availability (pure, no diagnostics inside resolver)
     # ------------------------------------------------------------------
     resolved = _resolve_present_records(
         run=run,
         dependencies=DEFAULT_DEPENDENCIES,
     )
 
-    dataframes: list[pd.DataFrame] = []
+    # ------------------------------------------------------------------
+    # 2. Resolution diagnostics
+    # ------------------------------------------------------------------
+    for key, deps in resolved.items():
+        record_dep = deps["record"]
+        derived_dep = deps["derived"]
+
+        # requested key with no direct record and no derivation path
+        if record_dep and record_dep.record is None and derived_dep is None:
+            issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.NO_RECORD,
+                    source="get_best_hydro_data",
+                    details=f"no direct or derived data available for '{key}'",
+                )
+            )
+            if required.get(key):
+                trace_severity = TraceSeverity.ERROR
 
     # ------------------------------------------------------------------
-    # 1. Load DIRECT RECORD timelines only
+    # 3. Load DIRECT timeline records
     # ------------------------------------------------------------------
+    dataframes: list[pd.DataFrame] = []
+
     for key, deps in resolved.items():
         record_dep = deps["record"]
         if record_dep is None:
@@ -345,29 +367,24 @@ def get_best_hydro_data(
 
         record = record_dep.record
 
-        # 1a. direct record missing
+        # 3a. missing record
         if record is None:
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.NO_RECORD,
-                source="get_best_hydro_data",
-                details=f"requested record '{key}' not present",
-            ))
-            if required.get(key):
-                trace_severity = TraceSeverity.ERROR
-            continue
+            continue  # already diagnosed in step 2
 
-        # 1b. invalid record type
+        # 3b. invalid record type
         if not record.is_timeline:
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.INVALID_RECORD_TYPE,
-                source="get_best_hydro_data",
-                details=f"record ID {record.id} (requested as '{key}') is not timeline type",
-            ))
+            issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INVALID_RECORD_TYPE,
+                    source="get_best_hydro_data",
+                    details=f"record ID {record.id} (requested as '{key}') is not timeline type",
+                )
+            )
             if required.get(key):
                 trace_severity = TraceSeverity.ERROR
             continue
 
-        # 1c. load timeline
+        # 3c. load data
         df, sub_issues = get_record_data(
             record=record,
             value_label=key,
@@ -375,14 +392,16 @@ def get_best_hydro_data(
             return_trace=True,
         )
 
-        # 1d. empty timeline
-        if df.empty:
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.NO_DATA_IN_RECORD,
-                source="get_best_hydro_data",
-                details=f"record ID {record.id} ('{key}') has no data",
-                causes=sub_issues,
-            ))
+        # 3d. empty data
+        if df is None or df.empty:
+            issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+                    source="get_best_hydro_data",
+                    details=f"record ID {record.id} ('{key}') contains no usable data",
+                    causes=sub_issues if sub_issues else None,
+                )
+            )
             if required.get(key):
                 trace_severity = TraceSeverity.ERROR
             continue
@@ -390,27 +409,30 @@ def get_best_hydro_data(
         dataframes.append(df)
 
     # ------------------------------------------------------------------
-    # 2. No usable direct records at all
+    # 4. No usable direct records at all
     # ------------------------------------------------------------------
     if not dataframes:
+        empty = pd.DataFrame(columns=list(labels.values()))
+
         if return_trace:
             trace = DataTrace(
-                issues=(DataIssue(
-                    reason=DataAbsenceReason.NO_RECORD,
-                    source="get_best_hydro_data",
-                    details="no usable hydro/sediment records acquired",
-                    causes=tuple(issues),
-                ),),
+                issues=tuple(issues) if issues else (
+                    DataIssue(
+                        reason=DataAbsenceReason.NO_RECORD,
+                        source="get_best_hydro_data",
+                        details="no usable hydro/sediment records acquired",
+                        causes=tuple(issues)
+                    ),
+                ),
                 category="missing_records",
                 level="hydro_sediment_record_set",
                 severity=trace_severity,
             )
 
-        empty = pd.DataFrame(columns=list(labels.values()))
         return (empty, trace) if return_trace else empty
 
     # ------------------------------------------------------------------
-    # 3. Merge timelines
+    # 5. Merge timelines
     # ------------------------------------------------------------------
     merged = pd.concat(dataframes, axis=1, join="outer")
     merged.index = pd.to_timedelta(merged.index)
@@ -421,7 +443,7 @@ def get_best_hydro_data(
             merged[key] = pd.NA
 
     # ------------------------------------------------------------------
-    # 4. Interpolation
+    # 6. Interpolation
     # ------------------------------------------------------------------
     merged, interp_issues = interpolate_dataframe(
         merged,
@@ -430,12 +452,17 @@ def get_best_hydro_data(
     )
 
     for key, iss in interp_issues.items():
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.INTERPOLATION_FAILED,
-            source="get_best_hydro_data",
-            details=f"interpolation failed for '{key}'",
-            causes=tuple(iss),
-        ))
+        if not iss:
+            continue
+
+        issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.INTERPOLATION_FAILED,
+                source="get_best_hydro_data",
+                details=f"interpolation failed for '{key}'",
+                causes=tuple(iss),
+            )
+        )
 
         trace_severity = (
             TraceSeverity.ERROR if required.get(key)
@@ -443,7 +470,7 @@ def get_best_hydro_data(
         )
 
     # ------------------------------------------------------------------
-    # 5. Derived quantities (correct place for derived absence)
+    # 7. Derived quantities
     # ------------------------------------------------------------------
     for key, deps in resolved.items():
         derived_dep = deps["derived"]
@@ -456,20 +483,21 @@ def get_best_hydro_data(
         ]
 
         if missing_sources:
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
-                source="get_best_hydro_data",
-                details=f"cannot derive '{key}'; missing source data",
-                causes=tuple(
-                    DataIssue(
-                        reason=DataAbsenceReason.NO_RECORD,
-                        source="get_best_hydro_data",
-                        details=f"source '{src}' unavailable",
-                    )
-                    for src in missing_sources
-                ),
-            ))
-
+            issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+                    source="get_best_hydro_data",
+                    details=f"cannot derive '{key}'; missing source data",
+                    causes=tuple(
+                        DataIssue(
+                            reason=DataAbsenceReason.NO_RECORD,
+                            source="get_best_hydro_data",
+                            details=f"source '{src}' unavailable",
+                        )
+                        for src in missing_sources
+                    ),
+                )
+            )
             if required.get(key):
                 trace_severity = TraceSeverity.ERROR
             continue
@@ -509,25 +537,21 @@ def get_best_hydro_data(
             )
 
     # ------------------------------------------------------------------
-    # 6. Final sanity check
+    # 8. Final sanity check
     # ------------------------------------------------------------------
-    if merged.notna().sum().sum() == 0 and return_trace:
-        trace = DataTrace(
-            issues=(DataIssue(
+    if merged.notna().sum().sum() == 0:
+        issues.append(
+            DataIssue(
                 reason=DataAbsenceReason.INVALID_VALUES,
                 source="get_best_hydro_data",
                 details="result dataframe contains only NA values",
-                causes=tuple(issues),
-            ),),
-            category="invalid_data",
-            level="hydro_sediment_record_set",
-            severity=trace_severity,
+            )
         )
 
     # ------------------------------------------------------------------
-    # 7. Finalize trace
+    # 9. Finalize trace
     # ------------------------------------------------------------------
-    if return_trace and trace is None and issues:
+    if return_trace and issues:
         trace = DataTrace(
             issues=tuple(issues),
             category="data_issues",
@@ -625,32 +649,6 @@ def _resolve_present_records(*, run, dependencies, units=DEFAULT_UNITS):
 
     return resolved
 
-
-
-#
-# def _resolve_present_records(*, run, dependencies, units=DEFAULT_UNITS):
-#
-#     present_records = {}
-#     derived_sources = {}
-#
-#     for key, configs in dependencies.items():
-#         record = None
-#         derived = None
-#
-#         for cfg in configs:
-#             if "record" in cfg:
-#                 record = get_best_record_of_unit(run=run, unit_id=units.get(key))
-#                 if record:
-#                     break
-#             elif "derived_from" in cfg:
-#                 derived = cfg["derived_from"]
-#
-#         present_records[key] = record
-#         if derived:
-#             derived_sources[key] = derived
-#
-#     return present_records, derived_sources
-
 def get_best_rainfall_intensity_record(
     *,
     run,
@@ -677,20 +675,22 @@ def get_best_rainfall_intensity_record(
         return_trace=return_trace,
     )
 
-
 def get_rainfall_intensity_value(
     *,
-    run: "Run",
-    target_unit_id: int | None = None,
+    run: Run,
+    target_unit_id: Optional[int] = None,
     return_trace: bool = False,
-):
+) -> Optional[object]:
+    """
+    Return representative rainfall intensity value.
+
+    Returns:
+    - float → constant rainfall
+    - "interrupted"
+    - "variable"
+    - None → unavailable / invalid
     """
 
-    :param run:
-    :param target_unit_id:
-    :param return_trace:
-    :return:
-    """
     issues: list[DataIssue] = []
 
     record, sub_issues = get_best_rainfall_intensity_record(
@@ -707,24 +707,56 @@ def get_rainfall_intensity_value(
         ))
         return (None, tuple(issues)) if return_trace else None
 
-    if sub_issues:
-        issues.extend(sub_issues)
-
-    # TODO must replace with appropriate getter for rainfall intensity (value, interrupted, variable)
-    value, sub_issues = get_record_scalar_value(
+    df, sub_issues = get_record_data(
         record=record,
         target_unit_id=target_unit_id,
-        value_label="rainfall_intensity",
-        source="get_rainfall_intensity_value",
-        multi_value=False,
-        return_trace=return_trace,
-    )
+        value_label="rain_intensity",
+        return_trace=return_trace)
+
+    if df is None or df.empty:
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+            source="get_rainfall_intensity_value",
+            details=f"record ID {record.id} (requested as '{'rain_intensity'}') has no data",
+            causes=sub_issues,
+        ))
+        return (None, tuple(issues)) if return_trace else None
+
+    values = df["rain_intensity"]
 
     if sub_issues:
         issues.extend(sub_issues)
 
-    return (value, tuple(issues)) if return_trace else value
+    if len(values) == 2:
+        # the last value of a propper rainfall timeline is 0 (zero)
+        if values.iloc[-1] != 0:
+            issues.append(DataIssue(
+                reason=DataAbsenceReason.INVALID_VALUES,
+                source="get_rainfall_intensity_value",
+                details=f"rainfall intensity record #{record.id} has non-zero last value",
+            ))
+            return (None, tuple(issues)) if return_trace else None
 
+        return (values.iloc[0], None) if return_trace else values.iloc[0]
+
+    # variable / interrupted rainfall
+    zero_count = (values == 0).sum()
+
+    if zero_count > 1:
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.INVALID_VALUES,
+            source="get_rainfall_intensity_value",
+            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
+        ))
+        return ("interrupted", tuple(issues)) if return_trace else "interrupted"
+
+    else:
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.INVALID_VALUES,
+            source="get_rainfall_intensity_value",
+            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
+        ))
+        return ("variable", tuple(issues)) if return_trace else "variable"
 
 def get_best_sediment_concentration_record(
         *,
@@ -781,7 +813,6 @@ def get_initial_moisture_value(
         record=record,
         target_unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
         value_label="initial_moisture",
-        source="get_initial_moisture_value",
         multi_value=multi_value,
         return_trace=return_trace,
     )
@@ -789,7 +820,6 @@ def get_initial_moisture_value(
         issues.extend(sub_issues)
 
     return (value, tuple(issues)) if return_trace else value
-
 
 
 def _adjust_end_time(merged_data, kwargs):

@@ -21,12 +21,12 @@ class TraceCollector:
     #     })
 
     def add(self, *, run_id, dataset, trace: DataTrace):
-        key = (run_id, dataset, trace.identity())
-
-        if key in self._seen_traces:
-            return
-
-        self._seen_traces.add(key)
+        # key = (run_id, dataset, trace.identity())
+        #
+        # if key in self._seen_traces:
+        #     return
+        #
+        # self._seen_traces.add(key)
         self._traces.append({
             "run_id": run_id,
             "dataset": dataset,

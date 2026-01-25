@@ -80,6 +80,13 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
                     labels_map=labels,
                     return_trace=True,
                 )
+                # collect the trace if any
+                if trace:
+                    collector.add(
+                        run_id=run.id,
+                        dataset="runoff_sediment_data",
+                        trace=trace,
+                    )
 
                 # write empty line to export if no runoff-sediment data were retrieved
                 if hydro_data.empty:
@@ -87,13 +94,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
                         output_csv,
                         run_line + [no_data_value] * len(interval_headers),
                     )
-                    # collect the trace if any
-                    if trace:
-                        collector.add(
-                            run_id=run.id,
-                            dataset="runoff_sediment_data",
-                            trace=trace,
-                        )
+
 
                     continue
 

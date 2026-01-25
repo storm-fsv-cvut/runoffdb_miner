@@ -140,8 +140,7 @@ def get_best_soil_dedicated_record(
         issues.append(DataIssue(
             reason=DataAbsenceReason.DEDICATION_MISSING,
             source="get_best_soil_dedicated_record",
-            details=(
-                "soil property record found on non-dedicated soil sample"
+            details=("soil property record found on non-dedicated soil sample"
             ),
         ))
 
@@ -200,7 +199,7 @@ def get_best_soil_texture_data(
         issues.append(DataIssue(
             reason=DataAbsenceReason.NO_RECORD,
             source="get_best_soil_texture_data",
-            details="No soil texture record found for run and related soil samples",
+            details="No soil texture record found for run or related soil samples",
             causes=sub_issues
         ))
         return (None, tuple(issues)) if return_trace else None
@@ -208,31 +207,37 @@ def get_best_soil_texture_data(
     if sub_issues:
         issues.extend(sub_issues)
 
-    df = texture_record.get_data(
+    df, sub_issues = get_record_data(
+        record=texture_record,
+        target_unit_id=CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID,
         value_label=x_label,
         related_x_label=y_label,
-        index_column=y_label,
         order_by=order_by,
-    )
+        return_trace=return_trace)
+
 
     if df is None or df.empty:
         issues.append(DataIssue(
             reason=DataAbsenceReason.NO_DATA_IN_RECORD,
             source="get_best_soil_texture_data",
             details=f"soil texture record ID {texture_record.id} contains no data",
+            causes=sub_issues
         ))
         return (None, tuple(issues)) if return_trace else None
 
+    if sub_issues:
+        issues.extend(sub_issues)
+
     if limits:
         df = interpolate_texture(
-            df,
-            limits,
-            x_label,
+            original_texture=df,
+            new_limits=limits,
+            cum_mass_col_name=x_label,
             return_int=return_int,
             return_cumulative=return_cumulative,
         )
 
-    return (df, None) if return_trace else df
+    return (df, tuple(issues) if issues else None) if return_trace else df
 
 
 def get_best_bulk_density_value(
@@ -268,7 +273,6 @@ def get_best_bulk_density_value(
         record=record,
         target_unit_id=target_unit_id,
         value_label="bulk_density",
-        source="get_best_bulk_density_value",
         multi_value=multi_value,
         return_trace=return_trace,
     )
@@ -278,7 +282,15 @@ def get_best_bulk_density_value(
 
     return (value, tuple(issues)) if return_trace else value
 
-def interpolate_texture(original_texture, new_limits, cum_mass_col_name, return_cumulative=True, return_int=True, smallest_content=1):
+def interpolate_texture(
+        original_texture,
+        new_limits,
+        cum_mass_col_name,
+        return_cumulative=True,
+        return_int=True,
+        smallest_content=1
+    ):
+
     import pandas as pd
 
     # ensure original_texture is a pandas DataFrame

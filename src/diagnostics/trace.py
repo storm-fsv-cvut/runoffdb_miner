@@ -18,6 +18,13 @@ class DataTrace:
     level: str
 
     def identity(self) -> tuple:
+        for idx, i in enumerate(self.issues):
+            if not isinstance(i, DataIssue):
+                raise TypeError(
+                    f"Invalid issue at index {idx} in DataTrace.issues: "
+                    f"type={type(i)!r}, value={i!r}"
+                )
+
         return (
             self.category,
             self.level,
@@ -29,6 +36,8 @@ class DataTrace:
 
 # service functions
 def serialize_issue(issue: DataIssue) -> dict:
+    if not isinstance(issue, DataIssue):
+        print(f"{issue}")
     return {
         "reason": issue.reason,
         "source": issue.source,

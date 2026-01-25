@@ -40,7 +40,6 @@ def get_plant_density_value(
     value, sub_issues = get_record_scalar_value(
         record=record,
         value_label="crop_density",
-        source="get_plant_density_value",
         multi_value=multi_value,
         return_trace=return_trace,
     )
@@ -85,7 +84,6 @@ def get_crop_height_value(
         record=record,
         target_unit_id=CROP_HEIGHT_CM_UNIT_ID,
         value_label="crop_height",
-        source="get_crop_height_value",
         multi_value=multi_value,
         return_trace=return_trace,
     )
@@ -125,7 +123,7 @@ def get_surface_cover_value(
         issues.append(DataIssue(
             reason=DataAbsenceReason.NO_RECORD,
             source="get_surface_cover_value",
-            details=f"no crop height record found",
+            details=f"no surface cover record found",
             causes=rec_issues
             )
         )
@@ -138,7 +136,6 @@ def get_surface_cover_value(
         record=record,
         target_unit_id=SURFACE_COVER_PERC_UNIT_ID,
         value_label="surface_cover",
-        source="get_surface_cover_value",
         multi_value=multi_value,
         return_trace=return_trace,
     )

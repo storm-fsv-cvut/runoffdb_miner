@@ -134,6 +134,7 @@ def get_record_data(
     related_y_label=None,
     related_z_label=None,
     target_unit_id=None,
+    order_by=None,
     remove_last_zero=False,
     return_trace: bool = False,
 ):
@@ -146,7 +147,7 @@ def get_record_data(
     """
     import pandas as pd
 
-    issue: DataIssue | None = None
+    issues: list[DataIssue] = []
 
     df = pd.DataFrame()
 
@@ -156,15 +157,16 @@ def get_record_data(
             related_x_label=related_x_label,
             related_y_label=related_y_label,
             related_z_label=related_z_label,
+            order_by=order_by,
         )
 
         if df.empty:
-            issue = DataIssue(
+            issues.append(DataIssue(
                 reason=DataAbsenceReason.NO_DATA_IN_RECORD,
                 source="get_record_data",
-                details=f"no data found for record {record.id} (requested as '{value_label}')",
-            )
-            return (df, issue) if return_trace else df
+                details=f"record ID {record.id} returned no data",
+            ))
+            return (df, tuple(issues)) if return_trace else df
 
 
         # unit conversion
@@ -179,39 +181,38 @@ def get_record_data(
                     output_column=value_label,
                 )
             except UnitConversionError as e:
-                issue = DataIssue(
+                issues.append(DataIssue(
                     reason=DataAbsenceReason.UNIT_CONVERSION_FAILED,
                     source="get_record_data",
                     details=f"unit conversion failed: {str(e)}",
-                )
-                return (None, issue) if return_trace else None
+                ))
+                return (None, tuple(issues)) if return_trace else None
 
             after_non_na = df[value_label].notna().sum()
             if after_non_na == 0 and before_non_na > 0:
-                issue = DataIssue(
+                issues.append(DataIssue(
                     reason=DataAbsenceReason.UNIT_CONVERSION_FAILED,
                     source="get_record_data",
                     details=f"units conversion {record.unit_id} -> {target_unit_id} removed all values",
-                )
+                ))
 
     except Exception as exc:
-        issue = DataIssue(
+        issues.append(DataIssue(
             reason=DataAbsenceReason.UNKNOWN,
             source="get_record_data",
             details=str(exc),
-        )
+        ))
 
     else:
         if remove_last_zero:
             df = remove_last_zero_row(df)
 
-    return (df, issue) if return_trace else df
+    return (df, tuple(issues)) if return_trace else df
 
 def get_record_scalar_value(
     *,
     record: "Record",
     value_label: str,
-    source: str,
     target_unit_id: int | None = None,
     multi_value: bool = False,
     return_trace: bool = False,
@@ -227,7 +228,7 @@ def get_record_scalar_value(
     issues: list[DataIssue] = []
 
     # load data
-    df, sub_issue = get_record_data(
+    df, sub_issues = get_record_data(
         record=record,
         value_label=value_label,
         related_x_label=None,
@@ -236,12 +237,17 @@ def get_record_scalar_value(
         target_unit_id=target_unit_id,
         return_trace=True,
     )
-
-    if sub_issue:
-        issues.append(sub_issue)
-
     if df is None or df.empty:
+        issues.append(DataIssue(
+            reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+            source="get_record_scalar_value",
+            details=f"no usable data gained for record {record.id} (requested as '{value_label}')",
+            causes=sub_issues
+        ))
         return (None, tuple(issues)) if return_trace else None
+
+    if sub_issues:
+        issues.append(sub_issues)
 
     values = df[value_label]
 
@@ -262,7 +268,7 @@ def get_record_scalar_value(
     # single value requested but data have more values
     issues.append(DataIssue(
         reason=DataAbsenceReason.DERIVED_MEAN,
-        source=source,
+        source="get_record_scalar_value",
         details=(
             f"record ID {record.id} contains multiple values but single value was requested - "
             "mean value was returned"

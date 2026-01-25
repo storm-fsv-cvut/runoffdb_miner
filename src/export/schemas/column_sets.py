@@ -25,7 +25,7 @@ def _soil_texture_value(limit):
         )
 
         if df is None or limit not in df.index:
-            return ctx["no_data_value"], issues
+            return None, issues
 
         return df.loc[limit, "cumulative_mass_content"], issues
 
