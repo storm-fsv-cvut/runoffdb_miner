@@ -13,23 +13,29 @@ from pandas import Timedelta
 
 WRB_FRACTION_LIMITS = [0.002, 0.063, 2]
 
-
-def _soil_texture_value(limit):
+def _soil_texture_value(
+    limit: float,
+    *,
+    source: str | None = None,
+    return_trace: bool = False,
+):
     def getter(run, ctx):
         df, issues = get_best_soil_texture_data(
             run=run,
             x_label="cumulative_mass_content",
             y_label="particle_size",
-            limits=WRB_FRACTION_LIMITS,
-            return_trace=True,
+            limits=[limit],
+            return_trace=return_trace,
         )
 
-        if df is None or limit not in df.index:
-            return None, issues
+        if df is None:
+            return (None, issues) if return_trace else None
 
-        return df.loc[limit, "cumulative_mass_content"], issues
+        value = df.loc[limit, "cumulative_mass_content"]
+        return (value, issues) if return_trace else value
 
     return getter
+
 
 
 
@@ -161,17 +167,17 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     # --- soil texture fractions ---
     RunColumn(
         header={"cz": "<0, 0.002mm>", "en": "<0, 0.002mm>"},
-        getter=_soil_texture_value(0.002),
+        getter=_soil_texture_value(0.002, return_trace=True),
     ),
 
     RunColumn(
         header={"cz": "<0.002, 0.063mm>", "en": "<0.002, 0.063mm>"},
-        getter=_soil_texture_value(0.063),
+        getter=_soil_texture_value(0.063, return_trace=True),
     ),
 
     RunColumn(
         header={"cz": "<0.063, 2mm>", "en": "<0.063, 2mm>"},
-        getter=_soil_texture_value(2),
+        getter=_soil_texture_value(2, return_trace=True),
     ),
 
     RunColumn(
@@ -262,127 +268,155 @@ INTERVAL_COLUMNS: list[IntervalColumn] = [
 # -------------------------
 # schema-compatible getters
 # -------------------------
+def _series_value_getter(*, series_key: str, source: str):
+    def getter(run, ctx, return_trace: bool = False):
+        hydro_df = ctx.get("hydro_df")
 
-def rainfall_total_getter(run, ctx):
-    hydro_df = ctx.get("hydro_df")
-    label = ctx.get("rainfall_total_label", "rainfall_total")
-    if hydro_df is not None and label in hydro_df.columns:
-        return get_value_in_time(
+        if hydro_df is None:
+            issue = DataIssue(
+                reason=DataAbsenceReason.RECORD_SET_NOT_AVAILABLE,
+                source=source,
+                details="runoff-sediment dataframe not available in context",
+            )
+            return (None, (issue,)) if return_trace else None
+
+        if series_key not in hydro_df.columns:
+            issue = DataIssue(
+                reason=DataAbsenceReason.RECORD_NOT_FOUND,
+                source=source,
+                details=f"series '{series_key}' not present in runoff-sediment data set",
+            )
+            return (None, (issue,)) if return_trace else None
+
+        value, issues = get_value_in_time(
             hydro_df,
             ctx["time"],
-            label,
+            series_key,
             interpolate=ctx.get("interpolate", True),
-            extrapolate=ctx.get("extrapolate", 2)
+            extrapolate=ctx.get("extrapolate"),
+            return_trace=True,
         )
-    return ctx["no_data_value"]
 
+        return (value, issues) if return_trace else value
 
-def runoff_getter(run, ctx):
-    hydro_df = ctx.get("hydro_df")
-    label = ctx.get("runoff_label", "runoff")
-    if hydro_df is not None and label in hydro_df.columns:
-        return get_value_in_time(
-            hydro_df,
-            ctx["time"],
-            label,
-            interpolate=ctx.get("interpolate", True),
-            extrapolate=ctx.get("extrapolate", 2)
-        )
-    return ctx["no_data_value"]
+    return getter
 
+rainfall_total_getter = _series_value_getter(
+    series_key="rainfall_total",
+    source="rainfall_total_getter",
+)
 
-def discharge_getter(run, ctx):
-    hydro_df = ctx.get("hydro_df")
-    label = ctx.get("discharge_label", "discharge")
-    if hydro_df is not None and label in hydro_df.columns:
-        return get_value_in_time(
-            hydro_df,
-            ctx["time"],
-            label,
-            interpolate=ctx.get("interpolate", True),
-            extrapolate=ctx.get("extrapolate", 2)
-        )
-    return ctx["no_data_value"]
+runoff_getter = _series_value_getter(
+    series_key="runoff",
+    source="runoff_getter",
+)
 
+discharge_getter = _series_value_getter(
+    series_key="discharge",
+    source="discharge_getter",
+)
 
-def sediment_conc_getter(run, ctx):
-    hydro_df = ctx.get("hydro_df")
-    label = ctx.get("sediment_conc_label", "sediment_concentration")
-    if hydro_df is not None and label in hydro_df.columns:
-        return get_value_in_time(
-            hydro_df,
-            ctx["time"],
-            label,
-            interpolate=ctx.get("interpolate", True),
-            extrapolate=ctx.get("extrapolate", 2)
-        )
-    return ctx["no_data_value"]
+sediment_conc_getter = _series_value_getter(
+    series_key="sediment_concentration",
+    source="sediment_conc_getter",
+)
 
+sediment_flux_getter = _series_value_getter(
+    series_key="sediment_flux",
+    source="sediment_flux_getter",
+)
 
-def sediment_flux_getter(run, ctx):
-    hydro_df = ctx.get("hydro_df")
-    label = ctx.get("sed_flux_label", "sediment_flux")
-    if hydro_df is not None and label in hydro_df.columns:
-        return get_value_in_time(
-            hydro_df,
-            ctx["time"],
-            label,
-            interpolate=ctx.get("interpolate", True),
-            extrapolate=ctx.get("extrapolate", 2)
-        )
-    return ctx["no_data_value"]
-
-
-def sediment_yield_getter(run, ctx):
-    hydro_df = ctx.get("hydro_df")
-    label = ctx.get("sed_yield_label", "sediment_yield")
-    if hydro_df is not None and label in hydro_df.columns:
-        return get_value_in_time(
-            hydro_df,
-            ctx["time"],
-            label,
-            interpolate=ctx.get("interpolate", True),
-            extrapolate=ctx.get("extrapolate", 2)
-        )
-    return ctx["no_data_value"]
+sediment_yield_getter = _series_value_getter(
+    series_key="sediment_yield",
+    source="sediment_yield_getter",
+)
 
 # getter for SLR ratio (crop / fallow)
-def slr_ratio_getter(run, ctx):
-    """
-    SLR ratio of crop / fallow.
-    Expects ctx to have:
-      - "sed_crop" : float
-      - "sed_fallow" : float
-      - "no_data_value" : fallback
-    """
-    sed_crop = float(ctx.get("sed_crop", 0) or 0)
-    sed_fallow = float(ctx.get("sed_fallow", 0) or 0)
-    if sed_fallow > 0:
-        return sed_crop / sed_fallow
-    return ctx["no_data_value"]
+def slr_ratio_getter(run, ctx, return_trace: bool = False):
+    sed_crop = ctx.get("sed_crop")
+    sed_fallow = ctx.get("sed_fallow")
+
+    if sed_crop is None:
+        issue = DataIssue(
+            reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+            source="slr_ratio_getter",
+            details="missing crop sediment yield for SLR calculation",
+        )
+        return (None, (issue, )) if return_trace else None
+
+    if sed_fallow in (None, 0):
+        issue = DataIssue(
+            reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+            source="slr_ratio_getter",
+            details="missing or zero fallow sediment yield for SLR calculation",
+        )
+        return (None, (issue, )) if return_trace else None
+
+    return (sed_crop / sed_fallow, None) if return_trace else sed_crop / sed_fallow
 
 
-def slr_average_getter(run, ctx):
-    """
-    Combined SLR across sequence.
-    Expects ctx to have:
-      - "slr_acc" : object with .combined_slr() method
-      - "no_data_value"
-    """
+def slr_average_getter(run, ctx, return_trace: bool = False):
     acc = ctx.get("slr_acc")
-    if acc:
-        val = acc.combined_slr()
-        return val if val is not None else ctx["no_data_value"]
-    return ctx["no_data_value"]
+
+    if not acc:
+        issue = (DataIssue(
+            reason=DataAbsenceReason.PROCESSING_ERROR,
+            source="slr_average_getter",
+            details="SLRAccumulator not available in context",
+        ),)
+        return (None, issue) if return_trace else None
+
+    value = acc.mean_if_complete()
+    if value is None:
+        issue = (DataIssue(
+            reason=DataAbsenceReason.PROCESSING_ERROR,
+            source="slr_average_getter",
+            details="combined SLR could not be computed",
+        ),)
+        return (None, issue) if return_trace else None
+
+    return (value, None) if return_trace else value
+
 
 
 SLR_COLUMNS = [
-    RunColumn(header={"en": "rainfall total", "cz": "srážkový úhrn"}, getter=rainfall_total_getter),
-    RunColumn(header={"en": "runoff", "cz": "průtok"}, getter=runoff_getter),
-    RunColumn(header={"en": "discharge", "cz": "celkový odtok"}, getter=discharge_getter),
-    RunColumn(header={"en": "sediment concentration", "cz": "koncentrace sedimentu"}, getter=sediment_conc_getter),
-    RunColumn(header={"en": "sediment flux", "cz": "tok sedimentu"}, getter=sediment_flux_getter),
-    RunColumn(header={"en": "sediment yield", "cz": "ztráta půdy"}, getter=sediment_yield_getter),
-    RunColumn(header={"en": "SLR ratio", "cz": "SLR"}, getter=slr_ratio_getter),
-    RunColumn(header={"en": "SLR averaged", "cz": "SLR průměr"}, getter=slr_average_getter),
+    RunColumn(
+        header={"en": "rainfall total [mm]", "cz": "srážkový úhrn [mm]"},
+        getter=rainfall_total_getter,
+    ),
+
+    RunColumn(
+        header={"en": "runoff rate [l.min-1]", "cz": "průtok [l/m]"},
+        getter=runoff_getter
+    ),
+
+    RunColumn(
+        header={"en": "discharge [l]", "cz": "celkový odtok [l]"},
+        getter=discharge_getter
+    ),
+
+    RunColumn(
+        header={"en": "sediment concentration [g.l-1]", "cz": "koncentrace sedimentu [g/l]"},
+        getter=sediment_conc_getter
+    ),
+
+    RunColumn(
+        header={"en": "sediment flux [g.min-1]", "cz": "tok sedimentu [g/min]"},
+        getter=sediment_flux_getter
+    ),
+
+    RunColumn(
+        header={"en": "sediment yield [g]", "cz": "ztráta půdy [g]"},
+        getter=sediment_yield_getter
+    ),
+
+    RunColumn(
+        header={"en": "SLR ratio", "cz": "SLR"},
+        getter=slr_ratio_getter
+    ),
+
+    RunColumn(
+        header={"en": "SLR averaged", "cz": "SLR kombi"},
+        getter=slr_average_getter
+    ),
 ]

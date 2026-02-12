@@ -17,6 +17,8 @@ from .utilities.plotters import *
 from .setup.unit_ids import *
 from .run_filter import RunFilter
 from .logging.logger import *
+from .services.record_resolution import *
+from .services.hydro_data import *
 
 
 lang = "en"
@@ -110,166 +112,6 @@ class Miner:
         """
         runs = self.runoffdb.load_runs(RunFilter(run_id=run_id))
         return runs.get(run_id)
-
-    # def generate_structured_dump(self, root_path, lang="en", no_data_value="NA"):
-    #     generate_structured_dump(self, root_path, lang, no_data_value)
-
-        # import pandas as pd
-        # try:
-        #     os.mkdir(root_path) if not os.path.isdir(root_path) else None
-        # except OSError as error:
-        #     print("Selected directory for the dump does not exist and it's not possible to create it.")
-        #     print("Dump failed.")
-        #     return
-        # else:
-        #
-        #     # get all dates when any simulation occurred
-        #     all_days = self.runoffdb.get_simulation_days(self.filter.date_from, self.filter.date_to)
-        #     print("\n")
-        #
-        #     for day in all_days:
-        #         # load runs of the day
-        #         day_runs = self.get_runs(RunFilter(date_from=day, date_to=day))
-        #         # no runs on day with simulations is a result of unfinished/messed-up entry in DB (run group without any run)
-        #         if day_runs is not None:
-        #             # crete directory for the day
-        #             day_dir = os.path.join(root_path, day.strftime('%Y-%m-%d'))
-        #             try:
-        #                 os.mkdir(day_dir)
-        #             except OSError as error:
-        #                pass
-        #
-        #             for run in day_runs:
-        #                 # create directory for the simulation run
-        #                 sim_dir_name = sanitize_path(f"{run.id}-{run.locality.name}-{run.crop.name[lang]}-{run.plot_id}-{run.run_type.name[lang]}")
-        #                 sim_dir = os.path.join(day_dir, sim_dir_name)
-        #                 print("\n"+80*"-")
-        #                 print(f"#{run.id} - {czech_date(day)} - {run.locality.name} - {run.crop.name[lang]} - {run.plot_id} - {run.run_type.name[lang]}")
-        #                 print(80 * "-")
-        #                 try:
-        #                     os.mkdir(sim_dir)
-        #                 except OSError as error:
-        #                     pass
-        #
-        #                 # collect and save run metadata
-        #                 with open(os.path.join(sim_dir, sim_dir_name+".json"), "w") as f:
-        #                     json.dump(run.get_metadata(), f, ensure_ascii=False, indent=4)
-        #
-        #                 self.runoffdb.clear_log()
-        #                 run_log_path = os.path.join(sim_dir, "log.txt")
-        #
-        #                 # loop through all phenomena and if measurement exists go through it's records
-        #                 for phid in self.runoffdb.get_all_phenomena_ids():
-        #                     msrmnts = run.get_measurements(phid)
-        #                     if msrmnts is not None:
-        #                         for ms in msrmnts:
-        #                             # loop through units and if record exists export it
-        #                             for uid in self.runoffdb.get_all_units_ids():
-        #                                 rcrds = ms.get_records(unit_id=uid)
-        #                                 if rcrds is not None:
-        #                                     recids = []
-        #                                     for rec in rcrds:
-        #                                         recids.append(rec.id)
-        #                                         if rec.record_type_id != 99:
-        #                                             # the dataframe is TimeDelta indexed if is_timeline attribute is True
-        #                                             index_column = "time" if rec.is_timeline else None
-        #                                             index = True if rec.is_timeline else False
-        #                                             # column_headers = ["time"] if rec.is_timeline else []
-        #                                             column_headers = []
-        #                                             rec_filename = sanitize_path(f"{rec.id}-{rec.unit.name[lang]}-[{rec.unit.unit}]")
-        #
-        #                                             try:
-        #                                                 data_df = rec.get_data("value", index_column=index_column)
-        #                                             except DataframeEmptyError as e:
-        #                                                 print(f"\t{e.message}")
-        #                                                 print(f"rec_filename: {rec_filename}")
-        #                                                 print(f"sim_dir: {sim_dir}")
-        #                                                 with open(os.path.join(sim_dir, rec_filename+".csv"), "w") as f:
-        #                                                     f.write(e.message)
-        #                                             else:
-        #                                                 if data_df is not None:
-        #
-        #                                                     column_headers.append(f"{rec.unit.name[lang]} [{rec.unit.unit}]")
-        #                                                     column_headers.append(f"{rec.unit_rel_x.name[lang]} [{rec.unit_rel_x.unit}]") if rec.related_value_x_unit_id is not None else None
-        #                                                     column_headers.append(f"{rec.unit_rel_y.name[lang]} [{rec.unit_rel_y.unit}]") if rec.related_value_y_unit_id is not None else None
-        #                                                     column_headers.append(f"{rec.unit_rel_z.name[lang]} [{rec.unit_rel_z.unit}]") if rec.related_value_z_unit_id is not None else None
-        #
-        #                                                     # format the TimeDelta index to desired format (get rid of the '0 days')
-        #                                                     if pd.api.types.is_timedelta64_dtype(data_df.index):
-        #                                                         data_df.index = data_df.index.map(lambda
-        #                                                                                     x: f"{x.components.hours:02}:{x.components.minutes:02}:{x.components.seconds:02}")
-        #
-        #                                                     print(f"#{rec.id}: {', '.join(column_headers)} ({self.runoffdb.record_types[rec.record_type_id].name[lang]}){' *' if rec.is_timeline else ''}")
-        #
-        #                                                     # try:
-        #                                                     local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
-        #                                                     data_df.to_csv(os.path.join(sim_dir, rec_filename+".csv"),
-        #                                                                index=index,
-        #                                                                sep=local_seps["celld"][lang],
-        #                                                                decimal=local_seps["decd"][lang],
-        #                                                                header=column_headers)
-        #                                                     # except ValueError:
-        #                                                     #     print(data_df)
-        #                                                 else:
-        #                                                     print(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
-        #                                                     with open(os.path.join(sim_dir, rec_filename+".csv", "w")) as f:
-        #                                                         f.write(f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
-        #                                     # print(f"{phid} - {len(ms.records)} ({', '.join([str(rid) for rid in recids])})")
-        #
-        #                 # get DataFrame with all hydro-sediment data
-        #
-        #                 rain_int_label = "rainfall intensity [mm.hour-1]"
-        #                 rain_tot_label = "rainfall total [mm]"
-        #                 runoff_label = "runoff [l.s-1]"
-        #                 discharge_label = "discharge [l]"
-        #                 sed_conc_label = "sediment concentration [g.l-1]"
-        #                 sed_flux_label = "sediment flux [g.min-1]"
-        #                 sed_yield_label = "sediment yield [g]"
-        #
-        #                 labels = {
-        #                     "rainfall_intensity": rain_int_label,
-        #                     "rainfall_total": rain_tot_label,
-        #                     "runoff": runoff_label,
-        #                     "sediment_concentration": sed_conc_label,
-        #                     "discharge": discharge_label,
-        #                     "sediment_flux": sed_flux_label,
-        #                     "sediment_yield": sed_yield_label
-        #                 }
-        #                 # all requests are False to get all runs
-        #                 request = {key: False for key in labels}
-        #
-        #                 try:
-        #                     hydro_data = run.get_best_hydro_data(request_map=request,
-        #                                                          labels_map=labels)
-        #                 except RecordSetNotComplete as e:
-        #                     # if any of needed records is not available skip the run and log why
-        #                     self.runoffdb.log(run.id,
-        #                             f"Following essential hydro-sediment records are not available: {', '.join([r for r in e.missing_records])}. "
-        #                             f"\n\t=> Run was excluded from the export.")
-        #                 else:
-        #                     # hydro_data.fillna(no_data_value, inplace=True)
-        #                     # in case all hydro-sediment data are empty
-        #                     if hydro_data.empty:
-        #                         self.runoffdb.log(run.id, f"\n\t=> Run has no hydro/sediment data.")
-        #
-        #                     # print(hydro_data[rain_int_label])
-        #                     # print(hydro_data[rain_tot_label])
-        #                     # print(hydro_data[runoff_label])
-        #                     # print(hydro_data[sed_conc_label])
-        #                     # print(hydro_data[sed_flux_label])
-        #                     # print(hydro_data[sed_yield_label])
-        #
-        #                     print(hydro_data)
-        #                     # print(hydro_data.index)
-        #                     print(hydro_data.columns.tolist())
-        #                     plot_hydro_data(hydro_data, os.path.join(sim_dir, "runoff.png"), [rain_int_label, rain_tot_label, runoff_label])
-        #                 self.runoffdb.save_log(run_log_path)
-        #         else:
-        #             print(f"\t{day.strftime('%Y-%m-%d')} skipped")
-        return
-
-    def get_simulation_days(self, date_from=None, date_to=None):
-        return self.runoffdb.get_simulation_days(date_to, date_from)
 
     def generate_html_overview(self, output_path, date_from=None, date_to=None, lang="en"):
 
@@ -1043,32 +885,25 @@ class Miner:
                 runoff_mm = "NA"
 
                 # search for surface runoff rate record
-                runoff_data = None
-                # go through the record type priority list and find the first matching Record
-                for record_type in self.runoff_types_view_order:
-                    # get the best surface runoff measurement Record
-                    found_records = run.get_records(1, 1, record_type)
-                    if found_records is not None:
-                        if len(found_records) > 1:
-                            print(f"\tMultiple runoff records of type {record_type} were found for run #{run.id}.\n"
-                                  f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
-                        runoff_record = found_records[0]
-                        # get runoff data in [l.min-1]
-                        runoff_data = runoff_record.get_data_in_unit(1, runoff_label)
-                        # if runoff data exist break the search cycle
-                        if runoff_data is not None:
-                            # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
-                            # if runoff dataframe has some data
-                            if not runoff_data.empty:
-                                try:
-                                    runoff_l = integrate_by_minutes(runoff_data, runoff_label,
-                                                                        zero_time=get_zero_time(runoff_data, runoff_label))
-                                    runoff_mm = runoff_l/plot_area
-                                except ValueError as e:
-                                    catchThem.append(runoff_record.id)
-                                    print(f"Integration by time failed on total runoff calculation - data frame index is not TimeDelta")
-                                    runoff_data = None
-                            break
+                runoff_record = get_best_runoff_record(run=run)
+                if runoff_record is None:
+                    continue
+                # get runoff data in [l.min-1]
+                runoff_data = runoff_record.get_data_in_unit(RUNOFF_RATE_LMIN_UNIT_ID, runoff_label)
+                # if runoff data exist break the search cycle
+                if runoff_data is not None:
+                    # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
+                    # if runoff dataframe has some data
+                    if not runoff_data.empty:
+                        try:
+                            runoff_l = integrate_by_minutes(runoff_data, runoff_label,
+                                                                zero_time=get_zero_time(runoff_data, runoff_label))
+                            runoff_mm = runoff_l/plot_area
+                        except ValueError as e:
+                            catchThem.append(runoff_record.id)
+                            print(f"Integration by time failed on total runoff calculation - data frame index is not TimeDelta")
+                            runoff_data = None
+                    break
 
                 line.append(runoff_mm)
 
@@ -1089,29 +924,20 @@ class Miner:
                 poznamky.append("")
 
                 # search for sediment concentration records
-                sediment_data = None
-                # go through the record type priority list and find the first matching Record
-                for record_type in self.ss_types_view_order:
-                    # get the best sediment concentration measurement Record(s)
-                    found_records = run.get_records([2, 3], 2, record_type_id=record_type)
-                    if found_records is not None:
-                        if len(found_records) > 1:
-                            print(f"\tMultiple sediment concentration records of type {record_type} were found for run #{run.id}.\n"
-                                  f"\tFirst of them will be used for processing (record id {found_records[0].id}).")
-                        ss_record = found_records[0]
-                        # get the sediment concentration data in [g.l-1]
-                        sediment_data = ss_record.get_data_in_unit(3, sed_conc_label)
-                        # if sediment data exist break the search cycle
-                        if sediment_data is not None:
-                            try:
-                                get_zero_time(sediment_data, sed_conc_label)
-                            except ValueError as e:
-                                catchThem.append(ss_record.id)
-                                print(
-                                    f"Integration by time failed on total sedtest calculation - data frame index is not TimeDelta")
-                                sediment_data = None
-                            # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
-                            break
+                ss_record = get_best_sediment_concentration_record(run=run)
+                # get the sediment concentration data in [g.l-1]
+                sediment_data = ss_record.get_data_in_unit(SS_CONCENTRATION_GL_UNIT_ID, sed_conc_label)
+                # if sediment data exist break the search cycle
+                if sediment_data is not None:
+                    try:
+                        get_zero_time(sediment_data, sed_conc_label)
+                    except ValueError as e:
+                        catchThem.append(ss_record.id)
+                        print(
+                            f"Integration by time failed on total sedtest calculation - data frame index is not TimeDelta")
+                        sediment_data = None
+                    # print(f"runoff best record of run {run.id} is {runoff_record.id} (unit: {runoff_record.unit_id}, record type: {runoff_record.record_type_id})")
+                    break
 
                 # initiate with NA values that will be used if no valid data is found
                 soilloss_g = "NA"

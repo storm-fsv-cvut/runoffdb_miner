@@ -6,7 +6,9 @@ class DataAbsenceReason(Enum):
     RECORD_NOT_ASSIGNED = auto()
     RECORD_NOT_FOUND = auto()
     NO_GENERIC_RECORD = auto()
+    RECORD_SET_NOT_AVAILABLE = auto()
     NO_DATA_IN_RECORD = auto()
+    DATA_NOT_AVAILABLE = auto()
     DEDICATION_MISSING = auto()  # for properties that should be assigned as dedicated but are not (desired unit record found but is not as dedicated
     FILTERED_OUT = auto()
     MISSING_REQUIRED_INPUT = auto()
@@ -29,4 +31,5 @@ class DataAbsenceReason(Enum):
     DERIVED_MEAN = auto()
     INCOMPATIBLE_UNIT_SET = auto()
 
+    PROCESSING_ERROR = auto()
     UNKNOWN = auto()

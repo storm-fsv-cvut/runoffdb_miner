@@ -43,13 +43,13 @@ ACCEPTABLE_UNITS = {
 }
 
 DEFAULT_LABELS = {
-    "runoff": "runoff",
-    "sediment_concentration": "sediment_concentration",
-    "rainfall_intensity": "rainfall_intensity",
-    "rainfall_total": "rainfall_total",
-    "discharge": "discharge",
-    "sediment_flux": "sediment_flux",
-    "sediment_yield": "sediment_yield",
+    "runoff": "runoff rate [l.min-1]",
+    "sediment_concentration": "sediment concentration [g.l-1]",
+    "rainfall_intensity": "rainfall intensity [mm.h-1]",
+    "rainfall_total": "rainfall total [mm]",
+    "discharge": "discharge [l]",
+    "sediment_flux": "sediment flux [g.min-1]",
+    "sediment_yield": "sediment yield [g]",
 }
 
 DEFAULT_INTERPOLATIONS = {
@@ -608,7 +608,7 @@ def get_initial_moisture_value(
         return (None, tuple(issues)) if return_trace else None
 
     if sub_issues:
-        issues.extend(sub_issues)
+        issues.extend(list(sub_issues))
 
     value, sub_issues = get_record_scalar_value(
         record=record,
@@ -618,7 +618,7 @@ def get_initial_moisture_value(
         return_trace=return_trace,
     )
     if sub_issues:
-        issues.extend(sub_issues)
+        issues.extend(list(sub_issues))
 
     return (value, tuple(issues)) if return_trace else value
 

@@ -16,7 +16,7 @@ def generate_structured_dump(miner: Miner, root_path, lang="en", no_data_value="
         return
 
     # get all dates when any simulation occurred
-    all_days = miner.get_simulation_days()
+    all_days = miner.runoffdb.get_simulation_days()
 
     for day in all_days:
         # get runs of the day

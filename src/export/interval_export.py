@@ -12,7 +12,7 @@ from src.diagnostics.trace import DataTrace, DataIssue
 from src.diagnostics.absence_reasons import DataAbsenceReason
 from src.diagnostics.severity import TraceSeverity
 
-def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="", output_trace_path=None):
+def generate_interval_values_csv(miner, output_path, lang="en", no_data_value="", output_trace_path=None, exclude_empty_runs=False):
     """
     Schema-driven interval export.
     Logging intentionally omitted.
@@ -50,7 +50,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
                         val = ctx["no_data_value"]
                     run_line.append(val)
 
-                    if issues is not None:
+                    if issues:
                         trace = DataTrace(
                             issues=issues,
                             category="run_metadata",
@@ -90,11 +90,11 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
 
                 # write empty line to export if no runoff-sediment data were retrieved
                 if hydro_data.empty:
-                    write_row_to_csv(
-                        output_csv,
-                        run_line + [no_data_value] * len(interval_headers),
-                    )
-
+                    if not exclude_empty_runs:
+                        write_row_to_csv(
+                            output_csv,
+                            run_line + [no_data_value] * len(interval_headers),
+                        )
 
                     continue
 
@@ -147,7 +147,7 @@ def generate_interval_values_csv(miner, output_path, lang="en", no_data_value=""
         return
 
 
-def generate_intervals_csv_by_simulator(miner, output_dir, lang="en", no_data_value="NA"):
+def generate_intervals_csv_by_simulator(miner, output_dir, lang="en", no_data_value="", output_trace_path=None):
 
     ensure_directory(output_dir)
 
@@ -175,4 +175,5 @@ def generate_intervals_csv_by_simulator(miner, output_dir, lang="en", no_data_va
                 output_path,
                 lang=lang,
                 no_data_value=no_data_value,
+                output_trace_path=output_trace_path
             )
