@@ -99,6 +99,8 @@ def get_best_hydro_data(
     Semantics:
     - empty DataFrame == function succeeded, no usable data
     - None is never returned
+
+    Default set of units and labels is provided - if other units are requested the labels must be changed as well!
     """
 
     # ------------------------------------------------------------------
@@ -347,7 +349,7 @@ def get_best_hydro_data(
             severity=trace_severity,
         )
 
-    merged = merged.rename(columns=labels)
+    merged.attrs["labels"] = labels
     return (merged, trace) if return_trace else merged
 
 

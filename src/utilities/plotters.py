@@ -231,8 +231,8 @@ def plot_hydro_data(df, output_path, series_to_plot=None, xaxis_format="%M:%S",
     :param extra_points: Dict {column_name: [(Timedelta, value), ...]}
     :param plot_title: Optional title for the plot
     """
-
     import pandas as pd
+    import numpy as np
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MultipleLocator, FuncFormatter
 
@@ -242,6 +242,15 @@ def plot_hydro_data(df, output_path, series_to_plot=None, xaxis_format="%M:%S",
 
     if not isinstance(df.index, pd.TimedeltaIndex):
         raise ValueError("DataFrame index must be a TimedeltaIndex.")
+
+    # sanitize numeric data for matplotlib
+    # converts nullable pandas dtypes (pd.NA) -> np.nan (float)
+    df = df.copy()
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # get labels map from dataframe
+    label_map = df.attrs.get("labels", {})
 
     # default chart types
     default_series = {
@@ -270,7 +279,7 @@ def plot_hydro_data(df, output_path, series_to_plot=None, xaxis_format="%M:%S",
     lines = []
 
     # spacing between right-side Y-axes
-    yaxis_spacing = 0.07
+    yaxis_spacing = 0.08
 
     # create additional Y-axes if needed
     for i in range(1, len(series_to_plot)):
@@ -284,11 +293,10 @@ def plot_hydro_data(df, output_path, series_to_plot=None, xaxis_format="%M:%S",
         axes.append(new_ax)
 
     if len(series_to_plot) > 1:
-        fig.subplots_adjust(right=0.80 + (len(series_to_plot) - 2) * 0.06)
+        fig.subplots_adjust(right=0.80 + (len(series_to_plot) - 2) * 0.05)
 
     # --- X-axis setup ---
-    # use numeric values in minutes
-    x_values = df.index.total_seconds() / 60
+    x_values = df.index.total_seconds() / 60  # minutes
     color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
     # --- plot each series ---
@@ -297,21 +305,32 @@ def plot_hydro_data(df, output_path, series_to_plot=None, xaxis_format="%M:%S",
         ax = axes[i]
         color = color_cycle[i % len(color_cycle)]
 
+        # enforce clean float numpy array per series
+        y_values = df[col].to_numpy(dtype=float)
+
+        # get series label from labels map
+        display_label = label_map.get(col, col)
+
         if chart_type == 'bar':
             bar_width = (x_values[1] - x_values[0]) if len(x_values) > 1 else 1
-            line = ax.bar(x_values, df[col], width=bar_width, label=col, color=color, alpha=0.6)
+            line = ax.bar(x_values, y_values, width=bar_width,
+                          label=display_label, color=color, alpha=0.6)
         elif chart_type == 'point':
-            line, = ax.plot(x_values, df[col], 'o', label=col, color=color)
+            line, = ax.plot(x_values, y_values, 'o',
+                            label=display_label, color=color)
         elif chart_type == 'step':
-            line, = ax.step(x_values, df[col], where='post', label=col, color=color)
+            line, = ax.step(x_values, y_values, where='post',
+                            label=display_label, color=color)
         else:  # line
-            line, = ax.plot(x_values, df[col], label=col, color=color)
+            line, = ax.plot(x_values, y_values,
+                            label=display_label, color=color)
 
         # optional extra points
         if extra_points and col in extra_points:
             x_extra = [t.total_seconds() / 60 for t, _ in extra_points[col]]
-            y_extra = [v for _, v in extra_points[col]]
-            ax.plot(x_extra, y_extra, 'o', color='black', markersize=6,
+            y_extra = [float(v) if v is not None else np.nan for _, v in extra_points[col]]
+            ax.plot(x_extra, y_extra, 'o',
+                    color='black', markersize=6,
                     markeredgecolor=color, zorder=10)
 
         # ensure Y-axis starts at 0 and extend top slightly
@@ -325,14 +344,13 @@ def plot_hydro_data(df, output_path, series_to_plot=None, xaxis_format="%M:%S",
         # tighten label spacing
         ax.yaxis.labelpad = 4
 
-        ax.set_ylabel(col, color=color)
+        ax.set_ylabel(display_label, color=color)
         ax.tick_params(axis='y', labelcolor=color)
         lines.append(line)
 
-    # --- X-axis formatting (exact 1-minute ticks starting at 0) ---
+    # --- X-axis formatting ---
     tick_interval = 1.0  # minutes
     base_ax.set_xlim(left=0)
-
     base_ax.xaxis.set_major_locator(MultipleLocator(tick_interval))
     base_ax.xaxis.set_major_formatter(FuncFormatter(
         lambda x, _: f"{int(x):02d}:{int((x % 1) * 60):02d}"

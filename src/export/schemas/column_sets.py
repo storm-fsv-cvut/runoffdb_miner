@@ -276,7 +276,7 @@ def _series_value_getter(*, series_key: str, source: str):
             issue = DataIssue(
                 reason=DataAbsenceReason.RECORD_SET_NOT_AVAILABLE,
                 source=source,
-                details="runoff-sediment dataframe not available in context",
+                details="runoff-sediment data set not available for given context",
             )
             return (None, (issue,)) if return_trace else None
 

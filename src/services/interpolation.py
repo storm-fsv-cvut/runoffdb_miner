@@ -59,7 +59,9 @@ def get_value_in_time(
         timedelta,
         series_name,
         zero_time=None,
-        interpolate=True, extrapolate=None, fallback="previous",
+        interpolate=True,
+        extrapolate=None,
+        fallback="previous",
         *,
         return_trace: bool = False
 ):

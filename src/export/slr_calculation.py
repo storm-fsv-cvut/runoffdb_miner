@@ -61,6 +61,46 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
 
     the_time = pd.Timedelta(in_time) if in_time is not None else pd.Timedelta("0:30:00")
 
+    if interpolate:
+        # settings for interpolated values
+        interpolate = True
+        extrapolate = 2
+        interpolations = {
+            "rainfall_total": "linear",
+            "runoff": "linear",
+            "sediment_concentration": "linear",
+            "sediment_flux": "linear",
+            "sediment_yield": "linear"
+        }
+
+        plot_types = {
+            "rainfall_total": "line",
+            "runoff": "line",
+            "sediment_concentration": "line",
+            "sediment_flux": "line",
+            "sediment_yield": "line"
+        }
+    else:
+        # settings for stepwise values
+        interpolate = False
+        extrapolate = -1
+        interpolations = {
+            "rainfall_total": "linear",
+            "runoff": "ffill",
+            "sediment_concentration": "ffill",
+            "sediment_flux": "ffill",
+            "sediment_yield": "ffill"
+        }
+
+        plot_types = {
+            "rainfall_total": "line",
+            "runoff": "step",
+            "sediment_concentration": "step",
+            "sediment_flux": "step",
+            "sediment_yield": "step"
+        }
+
+
     ensure_directory(output_dir)
     output_file = os.path.join(output_dir, f"_slr_{datetime.now().strftime('%Y%m%d')}.csv")
 
@@ -101,7 +141,7 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
                     # crop run values
                     run_line = []
                     # fallow run values
-                    frun_line = []
+                    f_run_line = []
                     ctx = {"lang": lang, "no_data_value": no_data_value}
 
                     # get basic info for the crop run
@@ -118,7 +158,7 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
                         if f_val is None:
                             f_val = ctx["no_data_value"]
                         run_line.append(val)
-                        frun_line.append((f_val))
+                        f_run_line.append((f_val))
 
                         if issues:
                             trace = DataTrace(
@@ -147,13 +187,13 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
 
                     # fetch hydrodata
                     labels = {
-                        "rainfall_intensity": "rainfall_intensity",
-                        "rainfall_total": "rainfall_total",
-                        "runoff": "runoff",
-                        "sediment_concentration": "sediment_concentration",
-                        "discharge": "discharge",
-                        "sediment_flux": "sediment_flux",
-                        "sediment_yield": "sediment_yield",
+                        "rainfall_intensity": "rainfall intensity [mm.h-1]",
+                        "rainfall_total": "rainfall total [mm]",
+                        "runoff": "runoff [l.min-1]",
+                        "sediment_concentration": "sediment concentration [g.l-1]",
+                        "discharge": "discharge [l]",
+                        "sediment_flux": "sediment flux [g.min-1]",
+                        "sediment_yield": "sediment yield [g]",
                     }
 
                     request = {k: False for k in labels}
@@ -164,6 +204,7 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
                         run=run,
                         request_map=request,
                         labels_map=labels,
+                        interpolation_map=interpolations,
                         return_trace=True,
                     )
                     # collect the trace if any
@@ -182,6 +223,7 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
                         run=frun,
                         request_map=request,
                         labels_map=labels,
+                        interpolation_map=interpolations,
                         return_trace=True,
                     )
                     # collect the trace if any
@@ -207,10 +249,11 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
                         the_time,
                         "sediment_yield",
                         interpolate=interpolate,
-                        extrapolate=1,
+                        extrapolate=extrapolate,
                         return_trace=True
                     )
-                    print(f"sedyield_crop: {sedyield_crop}")
+
+                    # print(f"sedyield_crop: {sedyield_crop}")
                     if pd.isna(sedyield_crop):
                         issues.append(DataIssue(
                             reason=DataAbsenceReason.DATA_NOT_AVAILABLE,
@@ -237,11 +280,11 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
                         the_time,
                         "sediment_yield",
                         interpolate=interpolate,
-                        extrapolate=1,
+                        extrapolate=extrapolate,
                         return_trace=True
                     )
 
-                    print(f"sedyield_fallow: {sedyield_fallow}")
+                    # print(f"sedyield_fallow: {sedyield_fallow}")
                     if pd.isna(sedyield_fallow):
                         issues.append(DataIssue(
                             reason=DataAbsenceReason.DATA_NOT_AVAILABLE,
@@ -291,7 +334,7 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
 
                     write_row_to_csv(output_csv, run_line + crop_slr_row)
 
-                    # --- FALLOW ROW (SLR lives here) ---
+                    # --- FALLOW ROW (contains SLR values) ---
                     fallow_ctx = {
                         "lang": lang,
                         "no_data_value": no_data_value,
@@ -310,21 +353,26 @@ def calculate_SLR(miner, output_dir, lang="en", no_data_value="", in_time=None, 
                         value, _ = col.getter(frun, fallow_ctx, return_trace=True)
                         fallow_slr_row.append(value if value is not None else no_data_value)
 
-                    write_row_to_csv(output_csv, frun_line + fallow_slr_row)
+                    write_row_to_csv(output_csv, f_run_line + fallow_slr_row)
 
-                    #
-                    # # optional: save plots and CSVs for hydrodata
-                    # if crop_hydrodata is not None:
-                    #     plot_file = os.path.join(output_dir, f"{run.id}_{run.datetime.strftime('%Y-%m-%d')}_{run.locality.name}_{run.crop.name[lang]}.png")
-                    #     plot_hydro_data(crop_hydrodata, plot_file, {}, extra_points={})
-                    #     crop_hydrodata.to_csv(os.path.join(output_dir, f"{run.id}.csv"),
-                    #                           index=True, sep=",", decimal=".")
-                    #
-                    # if fallow_hydrodata is not None:
-                    #     plot_file = os.path.join(output_dir, f"{frun.id}_{frun.datetime.strftime('%Y-%m-%d')}_{frun.locality.name}_{frun.crop.name[lang]}.png")
-                    #     plot_hydro_data(fallow_hydrodata, plot_file, {}, extra_points={})
-                    #     fallow_hydrodata.to_csv(os.path.join(output_dir, f"{frun.id}.csv"),
-                    #                             index=True, sep=",", decimal=".")
+
+                    # optional: save plots and CSVs for hydrodata
+                    if crop_hydrodata is not None:
+                        plot_title = f"\n#{run.id} - {czech_date(run.datetime)} >{run.locality.name}< {run.crop.name[lang]} @[{run.plot_id}] - {run.run_type.name[lang]} - {run.ttr}"
+                        plot_file = os.path.join(output_dir, f"{run.id}_{run.datetime.strftime('%Y-%m-%d')}_{run.locality.name}_{run.crop.name[lang]}.png")
+                        points = {"sediment_yield": [(the_time, sedyield_crop)]}
+
+                        plot_hydro_data(crop_hydrodata, plot_file, plot_types, extra_points=points, plot_title=plot_title)
+                        crop_hydrodata.to_csv(os.path.join(output_dir, f"{run.id}.csv"),
+                                              index=True, sep=",", decimal=".")
+
+                    if fallow_hydrodata is not None:
+                        plot_title = f"\n#{frun.id} - {czech_date(frun.datetime)} >{frun.locality.name}< {frun.crop.name[lang]} @[{frun.plot_id}] - {frun.run_type.name[lang]} - {frun.ttr}"
+                        plot_file = os.path.join(output_dir, f"{frun.id}_{frun.datetime.strftime('%Y-%m-%d')}_{frun.locality.name}_{frun.crop.name[lang]}.png")
+                        points = {"sediment_yield": [(the_time, sedyield_fallow)]}
+                        plot_hydro_data(fallow_hydrodata, plot_file, plot_types, extra_points=points, plot_title=plot_title)
+                        fallow_hydrodata.to_csv(os.path.join(output_dir, f"{frun.id}.csv"),
+                                                index=True, sep=",", decimal=".")
 
         print(f"\nSLR CSV exported to: {output_file}")
 
