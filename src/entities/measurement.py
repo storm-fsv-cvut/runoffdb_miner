@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from collections.abc import Iterable
+
 from ..utilities.utilities import *
 from ..setup.entity_ids import *
 from ..setup.table_names import *
@@ -47,13 +49,15 @@ class Measurement:
             for rec in self.records:
                 rec.show_details(indent)
 
-    def get_records(self,
-                    unit_id=None,
-                    record_type_id=None,
-                    related_value_x_unit_id=None,
-                    related_value_y_unit_id=None,
-                    related_value_z_unit_id=None,
-                    exclude_missing_records=False):
+    def get_records(
+            self,
+            unit_id: int | Iterable[int] | None = None,
+            record_type_id: int | None = None,
+            related_value_x_unit_id: int | Iterable[int] | None = None,
+            related_value_y_unit_id: int | Iterable[int] | None = None,
+            related_value_z_unit_id: int | Iterable[int] | None = None,
+            exclude_missing_records: bool = False,
+    ) -> list["Record"]:
         """
         The core method to obtain records.
 
@@ -67,30 +71,29 @@ class Measurement:
         """
         if self.records is not None:
             out = []
-            # print(f"requested unit_id: {unit_id}, record_type: {record_type_id}")
-            for rec in self.records:
-                # print(f"meas_id: {self.id}, rec_id: {rec.id}, unit_id: {rec.unit_id}")
-                if not unit_id:
-                    out.append(rec)
+
+            if self.records is not None:
+                out = []
+
+                # normalize unit_id
+                if unit_id is None:
+                    allowed_units = None
+                elif isinstance(unit_id, Iterable) and not isinstance(unit_id, (str, bytes)):
+                    allowed_units = set(unit_id)
                 else:
-                    if isinstance(unit_id, list):
-                        for uid in unit_id:
-                            if rec.unit_id == uid:
-                                if not record_type_id:
-                                    out.append(rec)
-                                else:
-                                    if rec.record_type_id == record_type_id:
-                                        out.append(rec)
-                    else:
-                        if rec.unit_id == unit_id:
-                            if not record_type_id:
-                                if exclude_missing_records and rec.record_type_id == MISSING_RECORD_TYPE_ID:
-                                    continue
-                                else:
-                                    out.append(rec)
-                            else:
-                                if rec.record_type_id == record_type_id:
-                                    out.append(rec)
+                    allowed_units = {unit_id}
+
+                for rec in self.records:
+                    if allowed_units is not None and rec.unit_id not in allowed_units:
+                        continue
+
+                    if record_type_id and rec.record_type_id != record_type_id:
+                        continue
+
+                    if exclude_missing_records and rec.record_type_id == MISSING_RECORD_TYPE_ID:
+                        continue
+
+                    out.append(rec)
 
             # filter by the related values units
             if related_value_x_unit_id is not None:
@@ -112,7 +115,7 @@ class Measurement:
                                         related_value_y_unit_id,
                                         related_value_z_unit_id)
             else:
-                return None
+                return []
 
     def get_metadata(self, lang="en"):
         meta = {"measurement ID": self.id,

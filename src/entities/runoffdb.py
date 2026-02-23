@@ -7,13 +7,16 @@ from ..entities.run import Run
 from ..entities.record import Record
 from ..entities.measurement import Measurement
 from ..entities.soil_sample import SoilSample
-from ..entities.data_owners import MeasurementOwner, RecordOwner
+from ..entities.data_owners import MeasurementOwner
 from ..entities.type_entities import *
 from ..setup.table_names import *
+from ..setup.variables_definition import VariableDefinition, VariableGroup, VARIABLE_REGISTRY
+from ..setup.variables_registry import VariableRegistry
 import os
 
 from sqlalchemy import text
-from typing import Iterable, Mapping, Any
+from typing import Any
+from dataclasses import replace
 
 class RunoffDB:
 
@@ -65,6 +68,14 @@ class RunoffDB:
         self.quality_index = self._load_quality_index()
         self.assignment_types = self._load_assignment_types()
 
+        # get and enrich variable registries
+        self.unit_families = self._group_units_by_quantity()
+        definitions = self._build_variable_definitions()
+
+        self.variable_registry = VariableRegistry(
+            variables=definitions,
+            units=self.units,
+        )
 
         print("\n... everything is ready.")
         print(80*"="+"\n")
@@ -456,6 +467,38 @@ class RunoffDB:
             units.update({new_unit.id: new_unit})
         print(f"units loaded ({len(units)})")
         return units
+
+    def _group_units_by_quantity(self):
+        """
+        Group all loaded Units into unit families by their English name,
+        using underscores instead of spaces as the canonical quantity key.
+        Returns a dict: {quantity_key: list[Unit]}
+        """
+        grouped = {}
+        for unit in self.units.values():
+            # convert English name to canonical code-friendly key
+            key = unit.name_en.replace(" ", "_")
+            grouped.setdefault(key, []).append(unit)
+        return grouped
+
+    def _build_variable_definitions(self) -> list[VariableDefinition]:
+        enriched: list[VariableDefinition] = []
+
+        for var_def in VARIABLE_REGISTRY:
+            default_unit = self.units.get(var_def.default_unit_id)
+
+            # no default unit → skip or keep without label
+            if not default_unit:
+                enriched.append(var_def)
+                continue
+
+            enriched.append(
+                replace(
+                    var_def,
+                    base_labels=default_unit.name
+            ))
+
+        return enriched
 
     def _load_projects(self):
         results = self._fetch_all(f"SELECT * FROM {projects_table}")

@@ -22,7 +22,6 @@ def get_best_record_of_unit(
     """
     Returns the best record according to type priority and quality index.
     """
-
     view_order = view_order or DEFAULT_RECORD_TYPE_PRIORITY
 
     for record_type in view_order:

@@ -17,6 +17,36 @@ class RunFilter:
     with_runoff_only: bool = False
     limit: int | None = None
 
+    def __str__(self) -> str:
+        parts = []
+
+        def fmt_iterable(value):
+            if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+                return f"[{', '.join(map(str, value))}]"
+            return str(value)
+
+        if self.date_from:
+            parts.append(f"date_from = {self.date_from.isoformat()}\n")
+        if self.date_to:
+            parts.append(f"date_to = {self.date_to.isoformat()}\n")
+
+        if self.simulators is not None:
+            parts.append(f"simulators = {fmt_iterable(self.simulators)}\n")
+        if self.localities is not None:
+            parts.append(f"localities = {fmt_iterable(self.localities)}\n")
+        if self.crops is not None:
+            parts.append(f"crops = {fmt_iterable(self.crops)}\n")
+        if self.run_id is not None:
+            parts.append(f"run_id = {fmt_iterable(self.run_id)}\n")
+
+        if self.with_runoff_only:
+            parts.append("with_runoff_only = True")
+
+        if self.limit is not None:
+            parts.append(f"limit = {self.limit}\n")
+
+        return f"RunFilter:\n{''.join(parts)}" if parts else "RunFilter(<no constraints>)"
+
     def matches(self, run) -> bool:
         if self.run_id is not None:
             if run.id not in as_list(self.run_id):

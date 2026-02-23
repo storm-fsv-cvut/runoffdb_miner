@@ -13,6 +13,59 @@ from pandas import Timedelta
 
 WRB_FRACTION_LIMITS = [0.002, 0.063, 2]
 
+def build_variable_header(
+    key: str,
+    registry,
+    lang: str,
+) -> str:
+    """
+    Build localized variable header including unit symbol.
+
+    Resolves:
+        - localized base label from VariableDefinition.base_labels
+        - default unit symbol from registry units
+
+    Fallback strategy:
+        - if variable missing -> return key
+        - if label missing for lang -> fallback to 'en'
+        - if no unit -> return label only
+    """
+    try:
+        var_def = registry[key]
+    except KeyError:
+        return key  # unknown variable
+
+    # ---- resolve label ----
+    label = None
+    if var_def.base_labels:
+        label = (
+            var_def.base_labels.get(lang)
+            or var_def.base_labels.get("en")
+        )
+
+    if not label:
+        label = key
+
+    # ---- resolve unit ----
+    unit_symbol = None
+    if var_def.default_unit_id is not None:
+        unit = registry._units.get(var_def.default_unit_id)
+        if unit:
+            unit_symbol = getattr(unit, "symbol", None)
+
+    if unit_symbol:
+        return f"{label} [{unit_symbol}]"
+
+    return label
+
+def resolve_header_of_column(column, registry, lang):
+    if callable(column.header):
+        return column.header(registry, lang)
+
+    if isinstance(column.header, dict):
+        return column.header.get(lang) or column.header.get("en") or ""
+
+
 def _soil_texture_value(
     limit: float,
     *,
@@ -35,7 +88,6 @@ def _soil_texture_value(
         return (value, issues) if return_trace else value
 
     return getter
-
 
 
 
@@ -132,13 +184,21 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     ),
 
     RunColumn(
-        header={"cz": "výška plodiny [cm]", "en": "crop height [cm]"},
+        header=lambda registry, lang: build_variable_header(
+            key="crop_height",
+            registry=registry,
+            lang=lang,
+        ),
         getter=lambda r, ctx:
             get_crop_height_value(run=r, return_trace=True, multi_value=False),
     ),
 
     RunColumn(
-        header={"cz": "počet rostlin [1/m2]", "en": "plant density [pcs.m^2]"},
+        header=lambda registry, lang: build_variable_header(
+            key="crop_density",
+            registry=registry,
+            lang=lang,
+        ),
         getter=lambda r, ctx:
             get_plant_density_value(run=r, return_trace=True, multi_value=False),
     ),
@@ -149,7 +209,11 @@ RUN_INFO_COLUMNS: list[RunColumn] = [
     ),
 
     RunColumn(
-        header={"cz": "zakrytí povrchu [%]", "en": "surface cover [%]"},
+        header=lambda registry, lang: build_variable_header(
+            key="surface_cover",
+            registry=registry,
+            lang=lang,
+        ),
         getter=lambda r, ctx: get_surface_cover_value(run=r, multi_value=False, return_trace=True),
     ),
 

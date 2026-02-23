@@ -42,7 +42,6 @@ class RecordOwner:
                     exclude_missing_records=False):
 
         out = []
-
         # get the measurements related to RecordOwner instance, pass on the argument
         # all measurements are returned if phenomenon_id is None
         measurements = self.get_measurements(phenomenon_id)
@@ -59,7 +58,6 @@ class RecordOwner:
                 # if any records like that exist
                 if recs:
                     out.extend(recs)
-
             # return None if the out list is empty
             return out or None
         else:

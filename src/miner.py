@@ -61,6 +61,9 @@ class Miner:
     def __exit__(self, exc_type, exc_value, traceback):
        return
 
+    def __str__(self):
+        return f"miner with filter:\n{self.filter}"
+
     @contextmanager
     def scoped_runs(self, query: RunFilter):
         """
@@ -1623,7 +1626,7 @@ class Miner:
         return
 
 
-    def find_fallow(self,date_from=None, date_to=None):
+    def find_fallow(self):
 
         if not self.runs:
             print("\n\033[91mNo runs available within given limits.\033[00m\n")
