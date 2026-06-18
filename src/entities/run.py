@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 from ..setup.entity_ids import *
-from ..setup.unit_ids import *
-from ..setup.table_names import *
+
+from ..processing.resolution.field import resolve_translated_field
 
 from ..utilities.utilities import *
-from ..run_filter import RunFilter
+from src.filters.run_filter import RunFilter
 from ..entities.soil_sample import SoilSample
 from ..entities.data_owners import MeasurementOwner, RecordOwner
 
-from src.services.record_resolution import get_best_record_of_unit
 
 class Run(MeasurementOwner, RecordOwner):
     def __init__(self, runoffdb, **kwargs):
@@ -147,6 +146,24 @@ class Run(MeasurementOwner, RecordOwner):
             for ms in msrmnts:
                 meta.append(ms.get_metadata(lang))
         return meta
+
+    def get_crop_condition(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="crop_condition",
+            values=self.crop_condition,
+            lang=lang,
+            source="Run.get_crop_condition",
+        )
+
+    def get_note(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="note",
+            values=self.note,
+            lang=lang,
+            source="Run.get_note",
+        )
 
     def get_notes(self, lang="en"):
         notes = {}

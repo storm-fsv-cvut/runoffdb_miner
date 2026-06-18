@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
+from ..processing.resolution.field import resolve_translated_field
 from ..setup.entity_ids import *
 from ..utilities.utilities import *
-from ..diagnostics.trace import *
+from ..diagnostics.trace import DataTrace
+from ..diagnostics.issue import DataIssue
+from ..diagnostics.severity import IssueSeverity
+from ..diagnostics.absence_reasons import *
 
-from datetime import date, datetime
+from datetime import datetime, date
+from typing import Optional, Tuple
+
 
 class Locality:
     def __init__(self, runoffdb, **kwargs):
@@ -46,6 +52,7 @@ class Locality:
         outstring += "\n"
         return outstring
 
+
 class Plot:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -65,74 +72,123 @@ class Plot:
 
         self.note = {"cz": kwargs.get("note_cz"), "en": kwargs.get("note_en")}
 
-    def get_protection_measures_names(self, lang, return_trace: bool = False):
-        issues = []
-        if self.protection_measures:
-            outlist = []
-            for m in self.protection_measures:
-                if m.name[lang] is not None:
-                    outlist.append(m.name[lang])
-                    # if the protection measure name is missing in requested language it must be resolved
-                else:
-                    outlist.append(f"missing name in '{lang}'")
-                    issues.append(DataIssue(
-                                reason=DataAbsenceReason.MISSING_PROPERTY_TRANSLATION,
-                                source="Plot.get_protection_measures_names",
-                                details=f"protection measure ID {m.id} is missing name in language '{lang}'",
-                            ))
-            outstr = ", ".join([msr for msr in outlist])
-            return (outstr, tuple(issues)) if return_trace else outstr
+    def get_protection_measures_names(self, lang: str):
 
-        return (None, None) if return_trace else None
+        trace = DataTrace(
+            source="Plot.get_protection_measures_names",
+            variable="protection_measure_names",
+            success=True,
+            owner_id=self.id,
+            owner_class=type(self).__name__,
+            traces=[],
+        )
 
-    def days_since_seeding(self, datetime: datetime, main_crop_only: bool = False, return_trace: bool = False):
-        """
+        if not self.protection_measures:
+            trace.details = f"no protection measure assigned to plot #{self.id}"
+            return None, trace
 
-        :param datetime:
-        :param main_crop_only:
-        :param return_trace:
-        :return:
-        """
-        # for the cultivated fallow always return None
-        if self.crop_id == CULTIVATED_FALLOW_CROP_ID:
-            issue = (DataIssue(
-                reason=DataAbsenceReason.INVALID_REQUEST,
-                source="get_days_since_seeding",
-                details=f"days since seeding irrelevant for 'cultivated fallow'",
-            ), )
-            return (None, issue) if return_trace else None
+        values = []
 
-        else:
-            if self.agrotechnology is not None:
-                days = self.agrotechnology.days_since_seeding(datetime, main_crop_only=main_crop_only)
-                return (days, None) if return_trace else days
+        for measure in self.protection_measures:
+
+            value, child_trace = measure.get_name(lang)
+
+            if child_trace:
+                trace.traces.append(child_trace)
+
+            if value:
+                values.append(value)
             else:
-                issue = (DataIssue(
-                    reason=DataAbsenceReason.MISSING_ENTITY_PROPERTY,
-                    source="get_days_since_seeding",
-                    details=f"plot ID {self.id} doesn't have agrotechnology assigned",
-                ), )
-                return (None, issue) if return_trace else None
+                values.append(f"#{measure.id}")
 
-    def days_since_last_operation(self, return_trace: bool = False):
+        return ", ".join(values), trace
+
+    def days_since_seeding(
+            self,
+            datetime: datetime,
+            main_crop_only: bool = False,
+    ) -> tuple[Optional[int], DataTrace]:
+        """
+        Returns number of days since seeding + provenance trace.
+        """
+
+        trace = DataTrace(
+            source="Plot.days_since_seeding",
+            variable="days_since_seeding",
+            success=True,
+            owner_id=self.id,
+            owner_class=type(self).__name__,
+            traces=[],
+        )
+
+        # -----------------------------------------
+        # cultivated fallow shortcut
+        # -----------------------------------------
+        if self.crop_id == CULTIVATED_FALLOW_CROP_ID:
+            trace.details="days since seeding irrelevant for cultivated fallow"
+            return None, trace
+
+        # -----------------------------------------
+        # agrotechnology path
+        # -----------------------------------------
+        if self.agrotechnology is not None:
+            days = self.agrotechnology.days_since_seeding(
+                datetime,
+                main_crop_only=main_crop_only,
+            )
+
+            trace.details = "derived from agrotechnology"
+
+            return days, trace
+
+        # -----------------------------------------
+        # missing dependency
+        # -----------------------------------------
+        issue = DataIssue(
+            reason=DataAbsenceReason.MISSING_PROPERTY,
+            source="Plot.get_days_since_seeding",
+            details=f"plot #{self.id} has no agrotechnology assigned",
+        )
+
+        trace.success=False
+        trace.details="unable to compute days since seeding",
+        trace.issues.append(issue)
+
+        return None, trace
+
+    def days_since_last_operation(self) -> tuple[Optional[int], DataTrace]:
+        trace = DataTrace(
+            source="Plot.days_since_last_operation",
+            variable="days_since_last_operation",
+            success=True,
+            owner_id=self.id,
+            owner_class=type(self).__name__,
+            traces=[],
+        )
+
         # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
         if self.crop_id == CULTIVATED_FALLOW_CROP_ID:
-            issue = DataIssue(
-                reason=DataAbsenceReason.IMPLICIT_VALUE,
-                source="days_since_last_operation",
-                details=f"days since last operation implicitly assumed = 0 for 'cultivated fallow'",
-            )
-            return (None, issue) if return_trace else None
+            trace.details = f"days since last operation implicitly assumed = 0 for 'cultivated fallow'"
+            return 0, trace
+
         else:
             if self.agrotechnology is not None:
-                return self.agrotechnology.days_since_last_operation(date)
+                trace.details = "derived from agrotechnology"
+
+                return self.agrotechnology.days_since_last_operation(date), trace
+
             else:
                 issue = DataIssue(
-                    reason=DataAbsenceReason.MISSING_ENTITY_PROPERTY,
-                    source="days_since_last_operation",
-                    details=f"plot ID {self.id} doesn't have agrotechnology assigned",
+                    reason=DataAbsenceReason.MISSING_PROPERTY,
+                    source="Plot.days_since_last_operation",
+                    details=f"plot #{self.id} has no agrotechnology assigned",
                 )
-                return (None, issue) if return_trace else None
+
+                trace.success = False
+                trace.details = "unable to compute days since last operation",
+                trace.issues.append(issue)
+
+                return None, trace
 
     def get_metadata(self, lang="en"):
         meta = {"plot ID": self.id,
@@ -160,34 +216,15 @@ class Plot:
             print(f"\t\t{measure.id} - {measure.name['cz']}")
         return
 
-    def get_note(self, lang="en", remove=None):
-        """
-        Return the note for the given language, with characters replaced
-        according to the `remove` mapping. Handles \n, \r\n, \\n safely.
-        """
-        note = self.note.get(lang)
+    def get_note(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="note",
+            values=self.note,
+            lang=lang,
+            source="Plot.get_note",
+        )
 
-        if not note:  # None or empty string
-            return None
-
-        # Default forbidden characters
-        default_remove = {
-            ";": ",",
-            "\r\n": ".",
-            "\n": ".",
-            "\r": ".",
-            "\\n": ".",  # literal backslash-n if stored as escaped
-        }
-
-        # Merge user-provided mapping
-        if remove:
-            default_remove.update(remove)
-
-        # Apply all replacements
-        for bad, replacement in default_remove.items():
-            note = note.replace(bad, replacement)
-
-        return note
 
 class Crop:
     def __init__(self, runoffdb, **kwargs):
@@ -207,6 +244,16 @@ class Crop:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
     def get_metadata(self, lang="en"):
         meta = {"crop ID": self.id,
                 "name": self.name[lang]
@@ -216,6 +263,7 @@ class Crop:
         meta.update({"variety": self.variety}) if self.variety is not None else None
         meta.update({"is catch crop": "True" if self.is_catch_crop == 1 else "False"}) if self.is_catch_crop is not None else None
         return meta
+
 
 class Agrotechnology:
 
@@ -237,14 +285,48 @@ class Agrotechnology:
         self.operation_sequence = self.runoffdb.get_operation_sequence(self.id)
 
     def get_maximum_disturbance_level(self):
+        trace = DataTrace(
+            source="Agrotechnology.get_maximum_disturbance_level",
+            variable="maximum_soil_disturbance_level",
+            success=True,
+            details="calculating maximum soil disturbance level from tillage operations sequence",
+            owner_id=self.id,
+            owner_class=type(self).__name__,
+            traces=[],
+        )
         if self.operation_sequence is None or self.operation_sequence == {}:
-            return None
-        return max([op.operation_intensity_id for op in self.operation_sequence.values()])
+            issue = DataIssue(
+                reason=DataAbsenceReason.MISSING_PROPERTY,
+                source="Agrotechnology.get_maximum_disturbance_level",
+                details=f"agrotechnology #{self.id} has empty operation sequence",
+                )
+            trace.success = False
+            trace.issues.append(issue)
+            return None, trace
+
+        return max([op.operation_intensity_id for op in self.operation_sequence.values()]), trace
 
     def get_maximum_disturbance_depth(self):
+        trace = DataTrace(
+            source="Agrotechnology.get_maximum_disturbance_depth",
+            variable="maximum_soil_disturbance_depth",
+            success=True,
+            details="calculating maximum soil disturbance depth from tillage operations sequence",
+            owner_id=self.id,
+            owner_class=type(self).__name__,
+            traces=[],
+        )
         if self.operation_sequence is None or self.operation_sequence == {}:
-            return None
-        return max([op.operation_depth_m for op in self.operation_sequence.values()])
+            issue = DataIssue(
+                reason=DataAbsenceReason.MISSING_PROPERTY,
+                source="Agrotechnology.get_maximum_disturbance_depth",
+                details=f"agrotechnology #{self.id} has empty operation sequence",
+            )
+            trace.success = False
+            trace.issues.append(issue)
+            return None, trace
+
+        return max([op.operation_depth_m for op in self.operation_sequence.values()]), trace
 
     def is_hay_cut(self):
         for op in self.operation_sequence.values():
@@ -312,6 +394,36 @@ class Agrotechnology:
                 meta.update({"maximum disturbance depth": self.get_maximum_disturbance_depth()})
                 meta.update({"maximum disturbance intensity": self.runoffdb.operation_intensities[self.get_maximum_disturbance_level()].description[lang]})
         return meta
+
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_note(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="note",
+            values=self.note,
+            lang=lang,
+            source=f"{type(self).__name__}.get_note",
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class Operation:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -331,6 +443,25 @@ class Operation:
         self.description = {"cz": self.description_cz, "en": self.description_en}
         self.machinery_type = {"cz": self.machinery_type_cz, "en": self.machinery_type_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
     def get_metadata(self, lang="en"):
         meta = {"name": self.name[lang]}
         if self.description[lang] is not None:
@@ -342,6 +473,7 @@ class Operation:
                 "operation depth unit": "m",
                 "operation intensity": self.runoffdb.operation_intensities[self.operation_intensity_id].description[lang]})
         return meta
+
 
 class Unit:
     def __init__(self, **kwargs):
@@ -356,6 +488,26 @@ class Unit:
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
 
 class Project:
     project_leaders = {1: "Dostál T.",
@@ -377,6 +529,16 @@ class Project:
 
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class Simulator:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -394,6 +556,25 @@ class Simulator:
 
         self.organization = self.runoffdb.organizations[self.organization_id]
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
     def show_properties(self, lang="en"):
         print(f"\n{self.id} - {self.name[lang]}")
         print(f"\tdescription: {self.description[lang]}")
@@ -409,6 +590,7 @@ class Simulator:
             meta.update({"description": self.description[lang],
                          "organization": self.organization.get_metadata()})
         return meta
+
 
 class Organization:
     def __init__(self, runoffdb, **kwargs):
@@ -445,6 +627,7 @@ class Organization:
 
         return meta
 
+
 class ProtectionMeasure:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -455,6 +638,26 @@ class ProtectionMeasure:
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
 
 class RunType:
     def __init__(self, **kwargs):
@@ -467,6 +670,26 @@ class RunType:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class CropType:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -478,6 +701,26 @@ class CropType:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class OperationType:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -486,6 +729,16 @@ class OperationType:
 
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class OperationIntensity:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -493,6 +746,16 @@ class OperationIntensity:
         self.description_en = kwargs.get("description_en")
 
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
 
 class Phenomenon:
     def __init__(self, **kwargs):
@@ -506,6 +769,26 @@ class Phenomenon:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class RecordType:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -518,6 +801,26 @@ class RecordType:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class QualityIndex:
     def __init__(self, **kwargs):
         self.id = kwargs["id"]
@@ -529,6 +832,26 @@ class QualityIndex:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
+
 class AssignmentType:
     def __init__(self, **kwargs):
 
@@ -537,6 +860,16 @@ class AssignmentType:
         self.description_en = kwargs.get("description_en")
 
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
+
 
 class Method:
 
@@ -548,12 +881,31 @@ class Method:
         self.name_en = kwargs["name_en"]
         self.description_cz = kwargs.get("description_cz")
         self.description_en = kwargs.get("description_en")
-        self.processing_steps_sequence = self.runoffdb.get_processing_steps_sequence(self.id) # ordered list of processing steps included in the method
+        # ordered list of processing steps included in the method
+        self.processing_steps_sequence = self.runoffdb.get_processing_steps_sequence(self.id)
         # self.instruments_map = {} # mapping local indexes to instrument class instances
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
 
     def show_details(self, lang="en", indent=""):
         print(f"\nMethodics {self.id} - {self.name[lang]}")
@@ -577,6 +929,7 @@ class Method:
         export["processing steps"] = steps
         return export
 
+
 class ProcessingStep:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -592,6 +945,25 @@ class ProcessingStep:
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
         self.instruments = self.runoffdb.get_instruments(self.id)
+
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
 
     def show_details(self, lang="en", indent=""):
         indent += "\t"
@@ -611,6 +983,7 @@ class ProcessingStep:
         export["instruments"] = [instr.export_to_json(lang, include_ids) for instr in self.instruments]
         return export
 
+
 class Instrument:
     def __init__(self, runoffdb, **kwargs):
         self.runoffdb = runoffdb
@@ -624,6 +997,25 @@ class Instrument:
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def get_name(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="name",
+            values=self.name,
+            lang=lang,
+            source=f"{type(self).__name__}.get_name",
+            mandatory=True,
+        )
+
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
 
     def show_details(self, lang="en", indent=""):
         indent += "\t"

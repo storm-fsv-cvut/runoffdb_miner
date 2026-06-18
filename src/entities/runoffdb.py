@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from sqlalchemy import create_engine
 
-from ..run_filter import RunFilter
+from src.filters.run_filter import RunFilter
 
 from ..entities.run import Run
 from ..entities.record import Record
@@ -10,7 +10,7 @@ from ..entities.soil_sample import SoilSample
 from ..entities.data_owners import MeasurementOwner
 from ..entities.type_entities import *
 from ..setup.table_names import *
-from ..setup.variables_definition import VariableDefinition, VariableGroup, VARIABLE_REGISTRY
+from ..setup.variables_definition import VariableDefinition, VARIABLE_REGISTRY
 from ..setup.variables_registry import VariableRegistry
 import os
 
@@ -20,7 +20,7 @@ from dataclasses import replace
 
 class RunoffDB:
 
-    def __init__(self, output_na_value=None, log_file_path=None):
+    def __init__(self):
         print(80*"=")
         print("RunoffDB initialization ... ")
         print(80*"="+"\n")
@@ -182,7 +182,7 @@ class RunoffDB:
             if query.date_from:
                 sql += f" AND rg.`datetime` >= '{query.date_from}'"
             if query.date_to:
-                sql += f" AND rg.`datetime` <= '{query.date_to}'"
+                sql += f" AND rg.`datetime` < '{query.date_to + timedelta(days=1)}'"
             if simulators:
                 sql += f" AND s.`simulator_id` IN ({', '.join(map(str, simulators))})"
             if localities:

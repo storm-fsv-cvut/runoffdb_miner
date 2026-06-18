@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 from dataclasses import dataclass
 
 from src.services.interpolation import *
@@ -9,9 +9,7 @@ from src.services.interpolation import interpolate_dataframe
 from src.services.integration import integrate_series
 from src.services.record_resolution import *
 
-from src.diagnostics.trace import DataTrace, DataIssue
 from src.diagnostics.absence_reasons import DataAbsenceReason
-from src.diagnostics.severity import TraceSeverity
 
 from src.entities.run import Run
 from src.setup.variables_registry import *
@@ -32,335 +30,374 @@ class DerivedDep:
 def get_best_hydro_data(
     *,
     run: "Run",
-    labels_map: Optional[Dict[str, str]] = None,
-    request_map: Optional[Dict[str, bool]] = None,
-    interpolation_map: Optional[Dict[str, str]] = None,
-    return_trace: bool = False,
-) -> pd.DataFrame | tuple[pd.DataFrame, "DataTrace | None"]:
+    request_map: dict[str, bool] | None = None,
+    interpolation_map: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, DataTrace]:
+    """
+    Hydro + sediment assembly resolver with full trace support.
+    """
 
-    print("\n=== get_best_hydro_data START ===")
-    print(f"Run ID: {run.id}")
-    print(f"Request map: {request_map}")
-
-    labels_map = labels_map or {}
     request_map = request_map or {}
     interpolation_map = interpolation_map or {}
 
-    registry = run.runoffdb.variable_registry.subregistry_by_group(VariableGroup.HYDRO_SEDIMENT)
+    registry = run.runoffdb.variable_registry.subregistry_by_group(
+        VariableGroup.HYDRO_SEDIMENT
+    )
 
     default_units = registry.default_units()
-    default_labels = registry.default_labels()
     default_interpolations = registry.default_interpolations()
 
-    labels = {k: labels_map.get(k, v) for k, v in default_labels.items()}
     interpolations = {
         k: interpolation_map.get(k, v)
         for k, v in default_interpolations.items()
     }
 
-    issues: list[DataIssue] = []
-    trace_severity = TraceSeverity.INFO
-
     merged = pd.DataFrame()
     resolved_cache: dict[str, bool] = {}
 
-    # ------------------------------------------------------------------
-    # Recursive resolver
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------
+    # root trace for whole hydro assembly
+    # ------------------------------------------------------------
+    root_trace = create_trace(
+        source="get_best_hydro_data",
+        details=f"run_id={run.id}",
+        owner=run,
+        dataset="hydro_sediment_data",
+    )
+
+    # ------------------------------------------------------------
+    # recursive resolver
+    # ------------------------------------------------------------
     def resolve_variable(key: str, required: bool) -> bool:
 
-        print(f"\nResolving variable: {key} (required={required})")
-
         if key in resolved_cache:
-            print(f"  -> already resolved: {resolved_cache[key]}")
             return resolved_cache[key]
 
         var_def = registry[key]
 
-        # --------------------------------------------------------------
-        # 1. Try direct record
-        # --------------------------------------------------------------
+        # ========================================================
+        # 1. direct record
+        # ========================================================
         record = None
-        if any("record" in d for d in var_def.dependencies):
-            print(f"  -> trying direct record for '{key}', allowed_units: {var_def.allowed_unit_ids}")
 
-            try:
-                record = get_best_record_of_unit(
-                    owner=run,
-                    unit_id=var_def.allowed_unit_ids,
-                    phenomenon_id=var_def.phenomenon_id,
-                )
-            except Exception as e:
-                print(f"  !! record lookup exception: {e}")
+        if any("record" in d for d in var_def.dependencies):
+
+            record, record_trace = get_best_record_of_unit(
+                owner=run,
+                unit_id=var_def.allowed_unit_ids,
+                phenomenon_id=var_def.phenomenon_id,
+            )
+
+            root_trace.traces.append(record_trace)
 
             if record:
-                print(f"  -> found record ID {record.id}")
 
                 if not record.is_timeline:
-                    print("  !! record not timeline type")
-                else:
-                    df, sub_issues = get_record_data(
-                        record=record,
-                        value_label=key,
-                        target_unit_id=default_units.get(key),
-                        return_trace=True,
-                    )
+                    resolved_cache[key] = False
+                    return False
 
-                    if df is not None and not df.empty:
-                        print(f"  -> record data loaded, rows: {len(df)}")
-                        series = df[key] if key in df else df.iloc[:, 0]
-                        merged[key] = series
-                        resolved_cache[key] = True
-                        return True
-                    else:
-                        print("  !! record has no usable data")
-            else:
-                print("  -> no direct record found")
+                df, data_trace = get_record_data(
+                    record=record,
+                    value_label=key,
+                    target_unit_id=default_units.get(key),
+                )
 
-        # --------------------------------------------------------------
-        # 2. Try derivation
-        # --------------------------------------------------------------
+                root_trace.traces.append(data_trace)
+
+                if df is not None and not df.empty:
+
+                    series = df[key] if key in df else df.iloc[:, 0]
+                    merged[key] = series
+
+                    resolved_cache[key] = True
+                    return True
+
+        # ========================================================
+        # 2. derivation
+        # ========================================================
         if var_def.derivation_func:
-            print(f"  -> attempting derivation of '{key}'")
 
             dependency_keys = []
             for dep in var_def.dependencies:
                 dependency_keys.extend(dep.get("derived_from", []))
 
-            print(f"     dependencies: {dependency_keys}")
-
             for dep_key in dependency_keys:
                 ok = resolve_variable(dep_key, required)
                 if not ok:
-                    print(f"     !! dependency '{dep_key}' failed")
                     resolved_cache[key] = False
                     return False
 
             try:
-                print(f"     -> executing derivation_func for '{key}'")
                 var_def.derivation_func(merged)
+
+                deriv_trace = DataTrace(
+                    source="derivation",
+                    variable=key,
+                    details=f"derived via {var_def.derivation_func.__name__}",
+                    success=True,
+                )
+
+                root_trace.traces.append(deriv_trace)
+
             except Exception as e:
-                print(f"     !! derivation failed: {e}")
+
+                error_trace = DataTrace(
+                    source="derivation",
+                    variable=key,
+                    details=f"derivation failed: {e}",
+                    success=False,
+                    issues=[
+                        DataIssue(
+                            reason=DataAbsenceReason.UNKNOWN,
+                            details=str(e),
+                            severity=IssueSeverity.ERROR,
+                        )
+                    ],
+                )
+
+                root_trace.traces.append(error_trace)
+
                 resolved_cache[key] = False
                 return False
 
             if key in merged and merged[key].notna().any():
-                print(f"     -> derivation succeeded for '{key}'")
                 resolved_cache[key] = True
                 return True
-            else:
-                print(f"     !! derivation produced no usable data")
 
-        # --------------------------------------------------------------
-        # 3. Not resolvable
-        # --------------------------------------------------------------
-        print(f"  -> '{key}' NOT resolvable")
+        # ========================================================
+        # 3. not resolvable
+        # ========================================================
         resolved_cache[key] = False
         return False
 
-    # ------------------------------------------------------------------
-    # 1. Resolve required variables
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------
+    # 1. required variables
+    # ------------------------------------------------------------
     for key, is_required in request_map.items():
+
         if not is_required:
             continue
-
-        print(f"\n--- Resolving mandatory variable '{key}' ---")
 
         available = resolve_variable(key, required=True)
 
         if not available:
-            print(f"!! Mandatory variable '{key}' unavailable. Aborting.")
 
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.NO_RECORD,
-                source="get_best_hydro_data",
-                details=f"mandatory variable '{key}' unavailable",
-            ))
-            trace_severity = TraceSeverity.ERROR
-
-            if return_trace:
-                trace = DataTrace(
-                    issues=tuple(issues),
-                    category="data_issues",
-                    level="hydro_sediment_record_set",
-                    severity=trace_severity,
+            root_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.NO_RECORD,
+                    details=f"mandatory variable '{key}' unavailable",
+                    severity=IssueSeverity.ERROR,
                 )
-                return pd.DataFrame(), trace
+            )
 
-            return pd.DataFrame()
+            root_trace.success = False
+            return pd.DataFrame(), root_trace
 
-    # ------------------------------------------------------------------
-    # 2. Resolve optional variables
-    # ------------------------------------------------------------------
-    print("\n--- Resolving optional variables ---")
-
+    # ------------------------------------------------------------
+    # 2. optional variables
+    # ------------------------------------------------------------
     for key in registry.keys():
+
         if key in resolved_cache:
             continue
+
         resolve_variable(key, required=False)
 
-    # ------------------------------------------------------------------
-    # 3. Final checks
-    # ------------------------------------------------------------------
-    print("\nMerged columns:", list(merged.columns))
-
+    # ------------------------------------------------------------
+    # 3. finalize
+    # ------------------------------------------------------------
     if merged.empty:
-        print("!! merged DataFrame is EMPTY")
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.INVALID_VALUES,
-            source="get_best_hydro_data",
-            details="no resolvable variables available",
-        ))
-
-        if return_trace:
-            trace = DataTrace(
-                issues=tuple(issues),
-                category="data_issues",
-                level="hydro_sediment_record_set",
-                severity=trace_severity,
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.INVALID_VALUES,
+                details="no resolvable variables available",
+                severity=IssueSeverity.WARNING,
             )
-            return merged, trace
+        )
 
-        return merged
+        root_trace.success = False
+        return merged, root_trace
 
     merged.index = pd.to_timedelta(merged.index)
     merged.sort_index(inplace=True)
 
-    merged, interp_issues = interpolate_dataframe(
+    merged = interpolate_dataframe(
         merged,
         interpolations,
-        return_trace=True,
     )
 
-    print("=== get_best_hydro_data END ===\n")
-
-    if return_trace:
-        if issues:
-            trace = DataTrace(
-                issues=tuple(issues),
-                category="data_issues",
-                level="hydro_sediment_record_set",
-                severity=trace_severity,
-            )
-        else:
-            trace = None
-
-        return merged, trace
-
-    return merged
-
-
+    return merged, root_trace
 
 
 def get_best_rainfall_intensity_record(
     *,
-    run,
-    view_order=None,
-    return_trace: bool = False,
-):
+    run: "Run",
+    view_order: list[int] | None = None,
+) -> tuple["Record | None", DataTrace]:
     """
-    Returns the best available rainfall intensity record for a run.
+    Returns the best available rainfall intensity record.
 
-    Preference order:
-    1. Dedicated rainfall intensity record explicitly assigned to the run
-    2. Best available rainfall intensity record matching known unit / phenomenon combinations
+    Resolution order:
+        1. run.rain_intensity_recid
+        2. generic rainfall intensity record
     """
 
-    issues: list[DataIssue] = []
+    var_def = (
+        run.runoffdb
+        .variable_registry["rainfall_intensity"]
+    )
 
-    # get the best record for the unit or units list
     return resolve_dedicated_or_generic_record(
         owner=run,
         dedicated_recid_attr="rain_intensity_recid",
-        unit_id=RAINFALL_INTENSITY_UNITS,
-        phenomenon_id=RAINFALL_PHEN_ID,
+        unit_id=var_def.allowed_unit_ids,
+        phenomenon_id=var_def.phenomenon_id,
         view_order=view_order,
-        return_trace=return_trace,
     )
+
 
 def get_rainfall_intensity_value(
     *,
-    run: Run,
-    target_unit_id: Optional[int] = None,
-    return_trace: bool = False,
-) -> Optional[object]:
-    """
-    Return representative rainfall intensity value.
+    run,
+    target_unit_id: int | None = None,
+) -> tuple[float | str | None, DataTrace]:
 
-    Returns:
-    - float → constant rainfall
-    - "interrupted"
-    - "variable"
-    - None → unavailable / invalid
-    """
+    root_trace = create_trace(
+        source="get_rainfall_intensity_value",
+        owner=run,
+        variable="rainfall_intensity",
+    )
 
-    issues: list[DataIssue] = []
+    # --------------------------------------------------
+    # resolve record
+    # --------------------------------------------------
 
-    record, sub_issues = get_best_rainfall_intensity_record(
+    record, rec_trace = get_best_rainfall_intensity_record(
         run=run,
-        return_trace=return_trace,
     )
 
     if not record:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_rainfall_intensity_value",
-            details="No rainfall intensity record found for run",
-            causes=sub_issues
-        ))
-        return (None, tuple(issues)) if return_trace else None
+        root_trace.success = False
+        root_trace.details = "no rainfall intensity record found"
 
-    df, sub_issues = get_record_data(
+        if rec_trace:
+            root_trace.traces.append(rec_trace)
+
+        return None, root_trace
+
+    current_trace = rec_trace
+
+    # --------------------------------------------------
+    # load / convert data
+    # --------------------------------------------------
+
+    df, df_trace = get_record_data(
         record=record,
+        value_label="rainfall_intensity",
         target_unit_id=target_unit_id,
-        value_label="rain_intensity",
-        return_trace=return_trace)
+    )
+
+    if df_trace:
+        df_trace.traces.append(current_trace)
+        current_trace = df_trace
 
     if df is None or df.empty:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_DATA_IN_RECORD,
-            source="get_rainfall_intensity_value",
-            details=f"record ID {record.id} (requested as '{'rain_intensity'}') has no data",
-            causes=sub_issues,
-        ))
-        return (None, tuple(issues)) if return_trace else None
 
-    values = df["rain_intensity"]
+        root_trace.success = False
 
-    if sub_issues:
-        issues.extend(sub_issues)
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+                details=f"record #{record.id} returned no usable data",
+                severity=IssueSeverity.ERROR
+            )
+        )
+
+        root_trace.traces.append(current_trace)
+
+        return None, root_trace
+
+    # --------------------------------------------------
+    # extract values
+    # --------------------------------------------------
+
+    values = df["rainfall_intensity"].dropna()
+
+    if values.empty:
+
+        root_trace.success = False
+
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+                details=f"record #{record.id} contains only NaN values",
+                severity=IssueSeverity.ERROR
+            )
+        )
+
+        root_trace.traces.append(current_trace)
+
+        return None, root_trace
+
+    # --------------------------------------------------
+    # classify rainfall regime
+    # --------------------------------------------------
 
     if len(values) == 2:
-        # the last value of a propper rainfall timeline is 0 (zero)
+
         if values.iloc[-1] != 0:
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.INVALID_VALUES,
-                source="get_rainfall_intensity_value",
-                details=f"rainfall intensity record #{record.id} has non-zero last value",
-            ))
-            return (None, tuple(issues)) if return_trace else None
 
-        return (values.iloc[0], None) if return_trace else values.iloc[0]
+            root_trace.success = False
 
-    # variable / interrupted rainfall
-    zero_count = (values == 0).sum()
+            root_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INVALID_VALUES,
+                    details=f"record #{record.id} invalid terminal value "
+                        "of rainfall timeline",
+                    severity=IssueSeverity.WARNING
+                )
+            )
 
-    if zero_count > 1:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.INVALID_VALUES,
-            source="get_rainfall_intensity_value",
-            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
-        ))
-        return ("interrupted", tuple(issues)) if return_trace else "interrupted"
+            root_trace.traces.append(current_trace)
 
-    else:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.INVALID_VALUES,
-            source="get_rainfall_intensity_value",
-            details=f"rainfall intensity record #{record.id} has more non-zero values (rainfall was interrupted)",
-        ))
-        return ("variable", tuple(issues)) if return_trace else "variable"
+            return None, root_trace
+
+        root_trace.details = "rainfall regime classified as 'constant'"
+        # root_trace.metadata = {
+        #     "record_id": record.id,
+        #     "rain_type": "constant",
+        # }
+
+        root_trace.traces.append(current_trace)
+
+        return values.iloc[0], root_trace
+
+    # --------------------------------------------------
+    # variable / interrupted
+    # --------------------------------------------------
+
+    zero_count = int((values == 0).sum())
+
+    rain_type = (
+        "interrupted"
+        if zero_count > 1
+        else "variable"
+    )
+
+    root_trace.details = (
+        f"rainfall regime classified as '{rain_type}'"
+    )
+    #
+    # root_trace.metadata = {
+    #     "record_id": record.id,
+    #     "rain_type": rain_type,
+    #     "zero_count": zero_count,
+    # }
+
+    root_trace.traces.append(current_trace)
+
+    return rain_type, root_trace
+
 
 def get_best_sediment_concentration_record(
         *,
@@ -391,39 +428,39 @@ def get_initial_moisture_value(
     *,
     run: "Run",
     multi_value: bool = False,
-    return_trace: bool = False,
 ):
-    issues: list[DataIssue] = []
+    root_trace = DataTrace(
+        variable="initial_moisture",
+        source="get_initial_moisture_value",
+        owner_class=type(run).__name__,
+        owner_id=getattr(run, "id", None),
+        success=True
+    )
 
-    record, sub_issues = resolve_dedicated_or_generic_record(
+    record, rec_trace = resolve_dedicated_or_generic_record(
         owner=run,
         dedicated_recid_attr="initmoist_recid",
         unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
-        return_trace=return_trace,
     )
     if not record:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_initial_moisture_value",
-            details="No initial soil moisture record found",
-            causes=sub_issues
-        ))
-        return (None, tuple(issues)) if return_trace else None
+        root_trace.success = False
+        root_trace.details = "no initial moisture record found"
+        root_trace.traces.append(rec_trace)
+        return None, root_trace
 
-    if sub_issues:
-        issues.extend(list(sub_issues))
-
-    value, sub_issues = get_record_scalar_value(
+    value, sv_trace = get_record_scalar_value(
         record=record,
         target_unit_id=SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,
         value_label="initial_moisture",
         multi_value=multi_value,
-        return_trace=return_trace,
     )
-    if sub_issues:
-        issues.extend(list(sub_issues))
 
-    return (value, tuple(issues)) if return_trace else value
+    if sv_trace:
+        rec_trace.traces.append(sv_trace)
+
+    root_trace.traces.append(rec_trace)
+
+    return value, root_trace
 
 
 def _adjust_end_time(merged_data, kwargs):

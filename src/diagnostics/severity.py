@@ -2,7 +2,7 @@
 from enum import Enum
 
 
-class TraceSeverity(str, Enum):
-    INFO = "info"
-    WARNING = "warning"
-    ERROR = "error"
+class IssueSeverity(str, Enum):
+    INFO = 0
+    WARNING = 1
+    ERROR = 2

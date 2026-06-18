@@ -1,17 +1,11 @@
 # from pipeline import Miner
 from ..miner import Miner
-from ..run_filter import RunFilter
-from .filesystem import *
-from .writers import *
+from src.filters.run_filter import RunFilter
 from .run_export import *
-import os
 from ..utilities.utilities import czech_date
-from ..utilities.plotters import *
 
 
 def generate_structured_dump(miner: Miner, root_path, lang="en", no_data_value="NA"):
-    import pandas as pd
-
     if not ensure_directory(root_path):
         return
 

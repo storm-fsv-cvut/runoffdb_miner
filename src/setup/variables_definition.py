@@ -15,16 +15,30 @@ class VariableGroup(Enum):
 class VariableDefinition:
     key: str
     phenomenon_id: Optional[int]
+    # main units
     default_unit_id: Optional[int]
     allowed_unit_ids: Tuple[int, ...]
+    # related units
+    default_relx_unit_id: Optional[int] = None
+    default_rely_unit_id: Optional[int] = None
+    default_relz_unit_id: Optional[int] = None
+    allowed_relx_unit_ids: Tuple[int, ...] = None
+    allowed_rely_unit_ids: Tuple[int, ...] = None
+    allowed_relz_unit_ids: Tuple[int, ...] = None
+
     aggregation: Optional[str] = None
     default_interpolation: Optional[str] = None
     dependencies: Tuple[dict, ...] = ()        # e.g., {"record": True} or {"derived_from": [...]}
     base_labels: Optional[Dict[str, str]] = None  # injected at runtime
     groups: tuple[VariableGroup, ...] = ()
 
-    # new: derivation instructions
+    # derivation instructions
     derivation_func: Optional[Callable[[pd.DataFrame, "VariableRegistry"], None]] = None
+
+    # dedicated records
+    dedicated_record_attr: Optional[str] = None
+    dedicated_soil_sample_attr: Optional[str] = None
+    dedicated_soil_record_attr: Optional[str] = None
 
     def __str__(self) -> str:
         parts = [f"key = '{self.key}'\n"]
@@ -35,9 +49,33 @@ class VariableDefinition:
         if self.default_unit_id is not None:
             parts.append(f"default_unit_id = {self.default_unit_id}\n")
 
+        if self.default_relx_unit_id is not None:
+            parts.append(f"default_relx_unit_id = {self.default_relx_unit_id}\n")
+
+        if self.default_rely_unit_id is not None:
+            parts.append(f"default_rely_unit_id = {self.default_rely_unit_id}\n")
+
+        if self.default_relz_unit_id is not None:
+            parts.append(f"default_relz_unit_id = {self.default_relz_unit_id}\n")
+
         if self.allowed_unit_ids:
             parts.append(
                 f"allowed_unit_ids = {list(self.allowed_unit_ids)}\n"
+            )
+
+        if self.allowed_relx_unit_ids:
+            parts.append(
+                f"allowed_relx_unit_ids = {list(self.allowed_relx_unit_ids)}\n"
+            )
+
+        if self.allowed_rely_unit_ids:
+            parts.append(
+                f"allowed_rely_unit_ids = {list(self.allowed_rely_unit_ids)}\n"
+            )
+
+        if self.allowed_relz_unit_ids:
+            parts.append(
+                f"allowed_relz_unit_ids = {list(self.allowed_relz_unit_ids)}\n"
             )
 
         if self.aggregation:
@@ -66,7 +104,7 @@ SURFACE_RUNOFF = VariableDefinition(
     allowed_unit_ids=tuple(RUNOFF_RATE_UNITS),
     aggregation=None,
     default_interpolation="linear",
-    dependencies=({"record": True}, )
+    dependencies=({"record": True}, ),
 )
 
 DISCHARGE = VariableDefinition(
@@ -126,7 +164,8 @@ RAINFALL_INTENSITY = VariableDefinition(
     allowed_unit_ids=tuple(RAINFALL_INTENSITY_UNITS),
     aggregation=None,
     default_interpolation="ffill",
-    dependencies=({"record": True}, )
+    dependencies=({"record": True}, ),
+    dedicated_record_attr="rain_intensity_recid"
 )
 
 
@@ -155,6 +194,7 @@ SOIL_MOISTURE = VariableDefinition(
     allowed_unit_ids=(SOIL_MOISTURE_VOLUME_PERC_UNIT_ID,),
     aggregation="mean",
     default_interpolation=None,
+    dedicated_record_attr="initmoist_recid",
 )
 
 BULK_DENSITY = VariableDefinition(
@@ -165,22 +205,18 @@ BULK_DENSITY = VariableDefinition(
     allowed_unit_ids=tuple(BULK_DENSITY_UNITS),
     aggregation="mean",
     default_interpolation=None,
+    dedicated_soil_sample_attr="bulk_ss_id",
+    dedicated_soil_record_attr="bulk_density_id",
 )
 
-CUMULATIVE_MASS_CONTENT = VariableDefinition(
-    key="cumulative_mass_content",
+PARTICLE_SIZE_DISTRIBUTION = VariableDefinition(
+    key="particle_size_distribution",
     phenomenon_id=PARTICLE_SIZE_DISTRIBUTION_PHEN_ID,
     groups=(VariableGroup.SOIL_PROPERTIES,),
     default_unit_id=CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID,
     allowed_unit_ids=(CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID,),
-)
-
-PARTICLE_SIZE_THRESHOLD = VariableDefinition(
-    key="particle_size_threshold",
-    phenomenon_id=PARTICLE_SIZE_DISTRIBUTION_PHEN_ID,
-    groups=(VariableGroup.SOIL_PROPERTIES,),
-    default_unit_id=PARTICLE_SIZE_THRESHOLD_MM_UNIT_ID,
-    allowed_unit_ids=(PARTICLE_SIZE_THRESHOLD_MM_UNIT_ID,),
+    default_relx_unit_id=PARTICLE_SIZE_THRESHOLD_MM_UNIT_ID,
+    allowed_relx_unit_ids=(PARTICLE_SIZE_THRESHOLD_MM_UNIT_ID,),
 )
 
 # ------------------------------------------------------------------
@@ -226,33 +262,8 @@ VARIABLE_REGISTRY = (
     SEDIMENT_YIELD,
     SOIL_MOISTURE,
     BULK_DENSITY,
-    CUMULATIVE_MASS_CONTENT,
-    PARTICLE_SIZE_THRESHOLD,
+    PARTICLE_SIZE_DISTRIBUTION,
     CROP_HEIGHT,
     CROP_DENSITY,
     SURFACE_COVER,
 )
-#
-# # subsets
-# HYDRO_SEDIMENT_VARIABLES = (
-#     RAINFALL_INTENSITY,
-#     RAINFALL_TOTAL,
-#     SURFACE_RUNOFF,
-#     DISCHARGE,
-#     SEDIMENT_CONCENTRATION,
-#     SEDIMENT_FLUX,
-#     SEDIMENT_YIELD,
-# )
-#
-# SOIL_VARIABLES = (
-#     SOIL_MOISTURE,
-#     BULK_DENSITY,
-#     CUMULATIVE_MASS_CONTENT,
-#     PARTICLE_SIZE_THRESHOLD,
-# )
-#
-# CROP_VARIABLES = (
-#     CROP_HEIGHT,
-#     CROP_DENSITY,
-#     SURFACE_COVER,
-# )

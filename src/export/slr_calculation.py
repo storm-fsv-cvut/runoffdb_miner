@@ -86,11 +86,16 @@ def build_interpolation_config(interpolate: bool):
             },
         }
 
-def fetch_hydro_sediment_df(run, request, labels, interpolations, collector, dataset_name):
+def fetch_hydro_sediment_df(run,
+                            request,
+                            # labels,
+                            interpolations,
+                            collector,
+                            dataset_name):
     hydro_df, trace = get_best_hydro_data(
         run=run,
         request_map=request,
-        labels_map=labels,
+        # labels_map=labels,
         interpolation_map=interpolations,
         return_trace=True,
     )
@@ -126,7 +131,7 @@ def resolve_sediment_yield(
     )
 
     if pd.isna(value):
-        trace = DataTrace(
+        trace = DataReport(
             issues=(
                 DataIssue(
                     reason=DataAbsenceReason.DATA_NOT_AVAILABLE,
@@ -137,7 +142,7 @@ def resolve_sediment_yield(
             ),
             category="missing_records",
             level="SLR calculation",
-            severity=TraceSeverity.ERROR,
+            severity=IssueSeverity.ERROR,
         )
         collector.add(run_id=run_id, dataset=dataset, trace=trace)
         return None
@@ -191,8 +196,7 @@ def calculate_SLR(
 
     collector = TraceCollector()
 
-
-    run_headers = [resolve_header_of_column(c, var_registry, lang) for c in RUN_INFO_COLUMNS]
+    run_headers = [resolve_header_of_column(c, var_registry, lang) for c in RUN_LEVEL_COLUMNS]
     slr_headers = [resolve_header_of_column(c, var_registry, lang) for c in SLR_COLUMNS]
 
     try:
@@ -218,11 +222,10 @@ def calculate_SLR(
                         print(f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]}\t-> \033[91mno reference fallow found\033[00m\n")
                         continue
 
-
                     crop_df = fetch_hydro_sediment_df(
                         run,
                         request,
-                        labels,
+                        # labels,
                         config["interpolations"],
                         collector,
                         "crop_runoff_sediment_data",
@@ -231,7 +234,7 @@ def calculate_SLR(
                     fallow_df = fetch_hydro_sediment_df(
                         frun,
                         request,
-                        labels,
+                        # labels,
                         config["interpolations"],
                         collector,
                         "fallow_runoff_sediment_data",
@@ -270,9 +273,9 @@ def calculate_SLR(
 
                     slr_accumulator.add_run_pair(run, sed_crop, sed_fallow)
 
-                    # only after all essential data are available the row are being assembled
+                    # only after all essential data are available the rows are being assembled
                     print(
-                        f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]}\t-> \033[91mno reference fallow found\033[00m\n")
+                        f"#{run.id} - {czech_date(run.datetime)} - {run.locality.name} - {run.crop.name[lang]}\t-> fallow #{frun.id}")
 
                     ## each iteration of the CROP runs loop 2 rows are created
                     # the rows are written only if all needed data are found
@@ -284,7 +287,7 @@ def calculate_SLR(
 
 
                     # get basic info for the crop run
-                    for col in RUN_INFO_COLUMNS:
+                    for col in RUN_LEVEL_COLUMNS:
                         # try:
                         val, issues = col.getter(run, ctx)
                         f_val, f_issues = col.getter(frun, ctx)
@@ -297,14 +300,14 @@ def calculate_SLR(
                         if f_val is None:
                             f_val = ctx["no_data_value"]
                         crop_row.append(val)
-                        fallow_row.append((f_val))
+                        fallow_row.append(f_val)
 
                         if issues:
-                            trace = DataTrace(
+                            trace = DataReport(
                                 issues=issues,
                                 category="run_metadata",
                                 level="run_info_columns",
-                                severity=TraceSeverity.WARNING,
+                                severity=IssueSeverity.WARNING,
                             )
                             collector.add(
                                 run_id=run.id,
@@ -312,11 +315,11 @@ def calculate_SLR(
                                 trace=trace)
 
                         if f_issues:
-                            trace = DataTrace(
+                            trace = DataReport(
                                 issues=f_issues,
                                 category="fallow_run_metadata",
                                 level="run_info_columns",
-                                severity=TraceSeverity.WARNING,
+                                severity=IssueSeverity.WARNING,
                             )
                             collector.add(
                                 run_id=run.id,

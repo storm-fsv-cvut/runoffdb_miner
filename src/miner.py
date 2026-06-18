@@ -7,17 +7,12 @@ import re
 
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Callable, Any, Iterable
-from dataclasses import dataclass
 
 from .entities.type_entities import *
 from .entities.runoffdb import RunoffDB
-from .entities.run import Run
 from .utilities.plotters import *
-from .setup.unit_ids import *
-from .run_filter import RunFilter
+from src.filters.run_filter import RunFilter
 from .logging.logger import *
-from .services.record_resolution import *
 from .services.hydro_data import *
 
 
@@ -308,6 +303,7 @@ class Miner:
             # close the files if were opened
             output_csv.close()
         return
+
     def generate_soilpulse_csv(self, output_path, lang="en", no_data_value="NA", logfile_path=None):
         """
 

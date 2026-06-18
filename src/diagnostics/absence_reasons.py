@@ -2,9 +2,11 @@ from enum import Enum, auto
 
 
 class DataAbsenceReason(Enum):
+    NO_RUN_SELECTED = auto()
     NO_RECORD = auto()
     RECORD_NOT_ASSIGNED = auto()
-    RECORD_NOT_FOUND = auto()
+    REFERENCED_RECORD_NOT_FOUND = auto()
+    REFERENCED_ENTITY_NOT_FOUND = auto()
     NO_GENERIC_RECORD = auto()
     RECORD_SET_NOT_AVAILABLE = auto()
     NO_DATA_IN_RECORD = auto()
@@ -13,7 +15,7 @@ class DataAbsenceReason(Enum):
     FILTERED_OUT = auto()
     MISSING_REQUIRED_INPUT = auto()
     MISSING_DATA = auto()
-    MISSING_ENTITY_PROPERTY = auto()
+    MISSING_PROPERTY = auto()
     MISSING_PROPERTY_TRANSLATION = auto()  # descriptive property is empty in requested language but not empty in other language - missing translation
     INTERPOLATION_NO_EFFECT = auto()
     INTERPOLATION_FAILED = auto()
@@ -27,7 +29,7 @@ class DataAbsenceReason(Enum):
     UNIT_CONVERSION_FAILED = auto()
     DATABASE_RECORD_INVALID = auto()
     INVALID_REQUEST = auto()  # requested value does not make sense in given context
-    IMPLICIT_VALUE = auto() # the value was not derived from DB values but was casted an implicit value
+    IMPLICIT_VALUE = auto()  # the value was not derived from DB values but was casted an implicit value
     DERIVED_MEAN = auto()
     INCOMPATIBLE_UNIT_SET = auto()
 

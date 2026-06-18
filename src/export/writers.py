@@ -83,9 +83,9 @@ def write_all_run_records_to_csv(run, dir, lang, no_data_value):
                                     # except ValueError:
                                     #     print(data_df)
                                 else:
-                                    print \
+                                    print\
                                         (f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
-                                    with open(os.path.join(dir, rec_filename +".csv", "w")) as f:
-                                        f.write \
+                                    with open(os.path.join(dir, rec_filename +".csv"), "w") as f:
+                                        f.write\
                                             (f"record {rec.id} ({rec.unit.name[lang]} [{rec.unit.unit}]) gains no data on load")
                         # print(f"{phid} - {len(ms.records)} ({', '.join([str(rid) for rid in recids])})")

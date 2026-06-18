@@ -50,5 +50,3 @@ def write_hydro_sediment_data_to_csv(run, output_path, lang, no_data_value, labl
     #                decimal=local_seps["decd"][lang],
     #                header=column_headers)
 
-    # miner.runoffdb.save_log(run_log_path)
-

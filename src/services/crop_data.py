@@ -1,5 +1,4 @@
-from src.diagnostics.trace import DataTrace, DataIssue
-from src.diagnostics.absence_reasons import DataAbsenceReason
+from src.diagnostics.report_collector import ReportCollector
 
 from src.setup.entity_ids import *
 from src.services.record_resolution import *
@@ -8,140 +7,133 @@ def get_plant_density_value(
     *,
     run: "Run",
     multi_value: bool = False,
-    return_trace: bool = False,
-):
+) -> tuple[float | None, DataTrace]:
 
-    issues: list[DataIssue] = []
+    root_trace = create_trace(
+            variable="plant_density",
+            source="get_plant_density_value",
+            owner=run,
+        )
 
     # for the cultivated fallow always return None
     if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
-        issue = (DataIssue(
-            reason=DataAbsenceReason.INVALID_REQUEST,
-            source="get_plant_density_value",
-            details=f"plant density irrelevant for 'cultivated fallow'",
-        ),)
-        return (None, issue) if return_trace else None
+        root_trace.details = f"plant density irrelevant for 'cultivated fallow'"
 
-    record = get_best_record_of_unit(
+        return None, root_trace
+
+    record, rec_trace = get_best_record_of_unit(
         owner=run,
         unit_id=CROP_DENSITY_M_2_UNIT_ID,
     )
 
     if not record:
-        issue = DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_plant_density_value",
-            details=(
-                f"no plant density record found"
-            ),
-        )
-        return (None, (issue, )) if return_trace else None
+        root_trace.success = False
+        root_trace.traces.append(rec_trace)
+        root_trace.details = "no plant density record found"
 
-    value, sub_issues = get_record_scalar_value(
+        return None, root_trace
+
+    value, sv_trace = get_record_scalar_value(
         record=record,
+        target_unit_id=CROP_DENSITY_M_2_UNIT_ID,
         value_label="crop_density",
         multi_value=multi_value,
-        return_trace=return_trace,
     )
+    if sv_trace:
+        rec_trace.traces.append(sv_trace)
 
-    if sub_issues:
-        issues.extend(sub_issues)
+    root_trace.traces.append(sv_trace)
 
-    return (value, tuple(issues)) if return_trace else value
+    return value, root_trace
 
 
 def get_crop_height_value(
     *,
     run: "Run",
     multi_value: bool = False,
-    return_trace: bool = False,
-):
-    issues: list[DataIssue] = []
+) -> tuple[float | None, DataTrace]:
 
     # for the cultivated fallow always return None
+    root_trace = DataTrace(
+        variable="crop_height",
+        source="get_crop_height_value",
+        success=True,
+    )
     if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
-        issue = (DataIssue(
-            reason=DataAbsenceReason.INVALID_REQUEST,
-            source="get_crop_height_value",
-            details=f"crop height irrelevant for 'cultivated fallow'",
-        ),)
-        return (None, issue) if return_trace else None
+        root_trace.details = f"crop height irrelevant for 'cultivated fallow'"
+        return None, root_trace
 
-    record = get_best_record_of_unit(
+    record, rec_trace = get_best_record_of_unit(
         owner=run,
         unit_id=CROP_HEIGHT_UNITS,
     )
 
     if not record:
-        issue = DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_crop_height_value",
-            details=f"no crop height record found",
-        )
-        return (None, (issue,)) if return_trace else None
+        root_trace.success = False
+        root_trace.traces.append(rec_trace)
+        root_trace.details = "no crop height record found"
 
-    value, sub_issues = get_record_scalar_value(
+        return None, root_trace
+
+
+    value, sv_trace = get_record_scalar_value(
         record=record,
         target_unit_id=CROP_HEIGHT_CM_UNIT_ID,
         value_label="crop_height",
         multi_value=multi_value,
-        return_trace=return_trace,
     )
+    if sv_trace:
+        rec_trace.traces.append(sv_trace)
 
-    if sub_issues:
-        issues.extend(sub_issues)
+    root_trace.traces.append(sv_trace)
 
-    return (value, tuple(issues)) if return_trace else value
+    return value, root_trace
 
 
 def get_surface_cover_value(
     *,
     run: "Run",
     multi_value: bool = False,
-    return_trace: bool = False,
-):
-    issues: list[DataIssue] = []
+) -> tuple[float | None, DataTrace]:
 
-    # for the cultivated fallow always return None
+    # for the cultivated fallow always return 0
+    root_trace = DataTrace(
+        variable="surface_cover",
+        source="get_surface_cover_value",
+        success=True,
+    )
     if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.INVALID_REQUEST,
-            source="get_surface_cover_value",
-            details=f"surface cover irrelevant for 'cultivated fallow'",
+        root_trace.details = f"surface cover assumed 0 'cultivated fallow'"
+        root_trace.issues.append(DataIssue(
+            reason=DataAbsenceReason.IMPLICIT_VALUE,
+            severity=IssueSeverity.INFO
         ))
-        return (0, tuple(issues)) if return_trace else 0
+        return 0, root_trace
 
     # get the best record for the unit or units list
-    record, rec_issues = resolve_dedicated_or_generic_record(
+    record, rec_trace = resolve_dedicated_or_generic_record(
         owner=run,
         dedicated_recid_attr="surface_cover_recid",
         unit_id=SURFACE_COVER_PERC_UNIT_ID,
-        return_trace=return_trace,
     )
 
     if not record:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_surface_cover_value",
-            details=f"no surface cover record found",
-            causes=rec_issues
-            )
-        )
-        return (None, tuple(issues)) if return_trace else None
+        root_trace.success = False,
+        root_trace.details = "no surface cover record found"
+        root_trace.traces.append(rec_trace)
+        return None, root_trace
 
-    if rec_issues:
-        issues.extend(rec_issues)
-
-    value, sub_issues = get_record_scalar_value(
+    value, sv_trace = get_record_scalar_value(
         record=record,
         target_unit_id=SURFACE_COVER_PERC_UNIT_ID,
         value_label="surface_cover",
         multi_value=multi_value,
-        return_trace=return_trace,
     )
 
-    if sub_issues:
-        issues.extend(sub_issues)
+    if sv_trace:
+        rec_trace.traces.append(sv_trace)
 
-    return (value, tuple(issues)) if return_trace else value
+    root_trace.traces.append(rec_trace)
+
+    return value, root_trace
 

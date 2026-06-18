@@ -1,55 +1,96 @@
-from dataclasses import dataclass
-from .absence_reasons import DataAbsenceReason
-from .severity import TraceSeverity
+from dataclasses import dataclass, field
+from typing import Optional
+
+from .severity import IssueSeverity
+from .issue import DataIssue
 
 
-@dataclass(frozen=True)
-class DataIssue:
-    reason: DataAbsenceReason
-    source: str
-    details: str
-    causes: tuple["DataIssue", ...] = ()
-
-@dataclass(frozen=True)
+@dataclass
 class DataTrace:
-    issues: tuple[DataIssue, ...]
-    severity: TraceSeverity
-    category: str
-    level: str
+    source: str
+    details: str = ""
+    variable: Optional[str] = None
+
+    owner_id: Optional[int] = None
+    owner_class: Optional[str] = None
+    dataset: Optional[str] = None
+
+    success: bool = True
+
+    traces: list["DataTrace"] = field(default_factory=list)
+
+    issues: list[DataIssue] = field(default_factory=list)
+
+    # metadata: dict | None = None
+
+    @property
+    def failed(self) -> bool:
+        return not self.success
+
+    # -------------------------
+    # helpers
+    # -------------------------
 
     def identity(self) -> tuple:
-        for idx, i in enumerate(self.issues):
-            if not isinstance(i, DataIssue):
-                raise TypeError(
-                    f"Invalid issue at index {idx} in DataTrace.issues: "
-                    f"type={type(i)!r}, value={i!r}"
-                )
 
         return (
-            self.category,
-            self.level,
-            tuple(
-                (i.reason, i.source, i.details)
-                for i in self.issues
-            ),
+            self.source,
+            self.details,
+            self.variable,
+            self.success,
+            self.owner_id,
+            self.owner_class,
+            self.dataset,
         )
 
-# service functions
-def serialize_issue(issue: DataIssue) -> dict:
-    if not isinstance(issue, DataIssue):
-        print(f"{issue}")
-    return {
-        "reason": issue.reason,
-        "source": issue.source,
-        "details": issue.details,
-        "causes": [serialize_issue(c) for c in issue.causes],
-    }
+    # -------------------------
+    # serialization
+    # -------------------------
+
+    def to_dict(self) -> dict:
+
+        return {
+            "variable": self.variable,
+            "source": self.source,
+            "details": self.details,
+            "owner_class": self.owner_class,
+            "owner_id": self.owner_id,
+            "dataset": self.dataset,
+            "success": self.success,
+
+            "traces": [
+                p.to_dict()
+                for p in self.traces
+            ],
+
+            "issues": [
+                i.to_dict()
+                for i in self.issues
+            ],
+
+            # "metadata": self.metadata,
+        }
 
 
-def serialize_trace(trace: DataTrace) -> dict:
-    return {
-        "severity": trace.severity,
-        "category": trace.category,
-        "level": trace.level,
-        "issues": [serialize_issue(i) for i in trace.issues],
-    }
+def create_trace(
+    *,
+    source: str,
+    owner,
+    details: str = None,
+    variable: str = None,
+    dataset: str = None,
+    success: bool = True,
+    traces: list[DataTrace] | None = None,
+    issues: list[DataIssue] | None = None,
+):
+    return DataTrace(
+        source=source,
+        variable=variable,
+        owner_id=getattr(owner, "id", None),
+        owner_class=type(owner).__name__,
+        dataset=dataset,
+        details=details,
+        success=success,
+        traces=traces if traces is not None else [],
+        issues=issues if issues is not None else [],
+    )

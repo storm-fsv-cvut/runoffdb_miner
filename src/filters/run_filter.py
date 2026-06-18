@@ -1,15 +1,15 @@
 
 from typing import Iterable
 from dataclasses import dataclass
-from datetime import time
+from datetime import date, time
 
-from .entities.type_entities import *
+from src.entities.type_entities import *
 
 
 @dataclass(frozen=True)
 class RunFilter:
-    date_from: datetime | None = None
-    date_to: datetime | None = None
+    date_from: date | None = None
+    date_to: date | None = None
     simulators: int | Iterable[int] | None = None
     localities: int | Iterable[int] | None = None
     crops: int | Iterable[int] | None = None

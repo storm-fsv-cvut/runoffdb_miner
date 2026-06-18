@@ -56,7 +56,7 @@ class Measurement:
             related_value_x_unit_id: int | Iterable[int] | None = None,
             related_value_y_unit_id: int | Iterable[int] | None = None,
             related_value_z_unit_id: int | Iterable[int] | None = None,
-            exclude_missing_records: bool = False,
+            exclude_missing_records: bool = True,
     ) -> list["Record"]:
         """
         The core method to obtain records.

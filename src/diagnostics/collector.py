@@ -1,7 +1,7 @@
 import json
 from typing import Iterable, Dict
 from collections import defaultdict
-from .trace import DataTrace, DataIssue, serialize_trace, serialize_issue
+from .trace import DataIssue, DataTrace
 
 class TraceCollector:
     SCHEMA_VERSION = 1
@@ -10,7 +10,7 @@ class TraceCollector:
         self._traces: list[dict] = []
         self._seen_traces: set[tuple] = set()
 
-    # def add(self, *, run_id, dataset, trace: DataTrace):
+    # def add(self, *, run_id, dataset, trace: DataReport):
     #     """
     #     Add a single trace entry.
     #     """
@@ -20,7 +20,7 @@ class TraceCollector:
     #         **serialize_trace(trace),
     #     })
 
-    def add(self, *, run_id, dataset, trace: DataTrace):
+    def add(self, *, run_id, dataset, trace):
         key = (run_id, dataset, trace.identity())
 
         if key in self._seen_traces:
@@ -31,7 +31,6 @@ class TraceCollector:
         self._traces.append({
             "run_id": run_id,
             "dataset": dataset,
-            **serialize_trace(trace),
         })
 
     def __iter__(self) -> Iterable[dict]:

@@ -1,6 +1,7 @@
 from ..exceptions import RequestedTimeDeltaValueMissing
 
-from src.diagnostics.trace import DataTrace, DataIssue
+from src.diagnostics.report_collector import ReportCollector
+from src.diagnostics.issue import DataIssue
 from src.diagnostics.absence_reasons import DataAbsenceReason
 
 import pandas as pd
@@ -10,17 +11,15 @@ def interpolate_dataframe(
     df: pd.DataFrame,
     methods: dict[str, Literal["linear", "ffill"]],
     *,
-    return_trace: bool = False,
+    report: ReportCollector | None = None,
 ) -> pd.DataFrame | tuple[pd.DataFrame, list["DataIssue"]]:
     """
     Interpolate DataFrame columns according to methods.
 
     Returns:
     - DataFrame
-    - (DataFrame, [DataTrace]) if return_traces=True
+    - (DataFrame, [DataReport]) if return_traces=True
     """
-
-    import pandas as pd
 
     result = df.copy()
     issues: dict[str: DataIssue] = {}
@@ -43,15 +42,14 @@ def interpolate_dataframe(
 
         # destructive interpolation (should be rare but critical)
         if before_non_na > 0 and after_non_na == 0:
-            issues.update({col: DataIssue(
-                                reason=DataAbsenceReason.INTERPOLATION_FAILED,
-                                source="interpolate_dataframe",
-                                details=f"column '{col}' lost all values during interpolation",
-                                )
-                            }
-                        )
+            if report:
+                report.add_issue(
+                    reason=DataAbsenceReason.INTERPOLATION_FAILED,
+                    source="interpolate_dataframe",
+                    details=f"column '{col}' lost all values during interpolation",
+                    )
 
-    return (result, issues) if return_trace else result
+    return result
 
 
 def get_value_in_time(
@@ -182,7 +180,7 @@ def get_value_in_time(
         )
         return (None, (issue,)) if return_trace else None
     # else:
-    #     trace = DataTrace(
+    #     trace = DataReport(
     #         reason=DataAbsenceReason.INTERPOLATION_NO_DATA,
     #         source="get_value_in_time",
     #         details=f"fallback=None returned None for '{series_name}' at {timedelta}",

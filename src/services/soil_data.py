@@ -7,7 +7,9 @@ from src.entities.record import *
 from src.entities.soil_sample import SoilSample
 
 from src.diagnostics.absence_reasons import DataAbsenceReason
-from src.diagnostics.trace import DataIssue
+from src.diagnostics.trace import DataTrace, create_trace
+from src.diagnostics.issue import DataIssue
+from src.diagnostics.severity import IssueSeverity
 
 # public API
 
@@ -18,144 +20,162 @@ def get_best_soil_dedicated_record(
     dedicated_rec_attr: str,
     allowed_units: int | list[int],
     phenomenon_id: int,
-    return_trace: bool = False,
 ):
-    """
-    Resolve the best soil-related record for a run using a dedicated soil sample,
-    with fallback to any assigned soil sample.
 
-    Resolution order:
-    1. Dedicated soil sample on run (e.g. run.texture_ss)
-       1.a sample reference invalid
-       1.b dedicated record not assigned
-       1.c record missing / wrong phenomenon / incompatible units
-       1.d valid dedicated record returned
-    2. Fallback: any soil sample assigned to run
-       2.a no suitable record found
-       2.b generic record found (reported as non-dedicated)
-    """
+    root_trace = create_trace(
+        source="get_best_soil_dedicated_record",
+        owner=run,
+        variable=f"{dedicated_ss_attr}-{dedicated_rec_attr}",
+        details="soil record resolution",
+    )
 
-    issues: list[DataIssue] = []
-
-    # normalize allowed units
     if not isinstance(allowed_units, (list, tuple, set)):
         allowed_units = [allowed_units]
 
     # --------------------------------------------------
-    # 1. dedicated soil sample path
+    # dedicated soil sample
     # --------------------------------------------------
+
     ss_id = getattr(run, dedicated_ss_attr, None)
 
     if ss_id is not None:
-        ss = run.runoffdb.get_soil_samples_by_id(ss_id)
-        # 1.a invalid soil sample reference
-        if not isinstance(ss, SoilSample):
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.DATABASE_RECORD_INVALID,
-                source="get_best_soil_dedicated_record",
-                details=f"run.{dedicated_ss_attr} references a non-existent SoilSample ID {ss_id}",
-            ))
-            return (None, tuple(issues)) if return_trace else None
 
-        # 1.b dedicated record ID on soil sample
+        ss = run.runoffdb.get_soil_samples_by_id(ss_id)
+
+        if not isinstance(ss, SoilSample):
+
+            root_trace.success = False
+            root_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.REFERENCED_ENTITY_NOT_FOUND,
+                    source="get_best_soil_dedicated_record",
+                    details=f"soil sample #{ss_id} referenced by {dedicated_ss_attr} was not found"
+                )
+            )
+
+            return None, root_trace
+
         rec_id = getattr(ss, dedicated_rec_attr, None)
-        if not rec_id:
-            issues.append(DataIssue(
-                reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
-                source="get_best_soil_dedicated_record",
-                details=(
-                    f"dedicated SoilSample '{dedicated_ss_attr}' ID {ss_id} does not have appropriate dedicated record assigned"
-                    f"(attribute {dedicated_rec_attr})"
-                ),
-            ))
-        else:
+
+        if rec_id:
+
             record = run.runoffdb.load_record_by_id(rec_id)
 
-            # 1.c.1 record missing
             if not record:
-                issues.append(DataIssue(
-                    reason=DataAbsenceReason.RECORD_NOT_FOUND,
-                    source="get_best_soil_dedicated_record",
-                    details=(
-                        f"SoilSample.{dedicated_rec_attr}={rec_id} "
-                        f"but record not found"
-                    ),
-                ))
-                return (None, tuple(issues)) if return_trace else None
 
-            # 1.c.2 wrong phenomenon
+                root_trace.success = False
+                root_trace.issues.append(
+                    DataIssue(
+                        reason=DataAbsenceReason.REFERENCED_RECORD_NOT_FOUND,
+                        source=f"record #{rec_id} referenced by {dedicated_rec_attr} was not found",
+                    )
+                )
+
+                return None, root_trace
+
             if record.phenomenon_id != phenomenon_id:
-                issues.append(DataIssue(
-                    reason=DataAbsenceReason.INVALID_RECORD_TYPE,
-                    source="get_best_soil_dedicated_record",
-                    details=(
-                        f"record ID {record.id} has phenomenon "
-                        f"{record.phenomenon_id}, expected {phenomenon_id}"
-                    ),
-                ))
-                return (None, tuple(issues)) if return_trace else None
+                root_trace.success = False
+                root_trace.issues.append(
+                    DataIssue(
+                        reason=DataAbsenceReason.INVALID_RECORD_TYPE,
+                        source="get_best_soil_dedicated_record",
+                        details=(
+                            f"record {record.id} has phenomenon "
+                            f"{record.phenomenon_id}, expected {phenomenon_id}"
+                        ),
+                    )
+                )
 
-            # 1.c.3 incompatible units
+                return None, root_trace
+
+
             if not record_matches_units(
                 record,
                 allowed_unit_ids=allowed_units,
             ):
-                issues.append(DataIssue(
-                    reason=DataAbsenceReason.INCOMPATIBLE_UNIT_SET,
-                    source="get_best_soil_dedicated_record",
-                    details=(
-                        f"record ID {record.id} has incompatible units "
-                        f"(unit_id={record.unit_id}, "
-                        f"x={record.related_value_x_unit_id}, "
-                        f"y={record.related_value_y_unit_id}, "
-                        f"z={record.related_value_z_unit_id})"
-                    ),
-                ))
-                return (None, tuple(issues)) if return_trace else None
 
-            # 1.d success
-            return (record, None) if return_trace else record
+                root_trace.success = False
+                root_trace.issues.append(
+                    DataIssue(
+                        reason=DataAbsenceReason.INCOMPATIBLE_UNIT_SET,
+                        source="get_best_soil_dedicated_record",
+                        details=f"record {record.id} has incompatible units",
+                    )
+                )
+
+                return None, root_trace
+
+
+            root_trace.details = "dedicated soil record selected"
+            return record, root_trace
+
+
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
+                source="get_best_soil_dedicated_record",
+                details=(
+                    f"SoilSample {ss_id} has no {dedicated_rec_attr}"
+                ),
+            )
+        )
+
 
     # --------------------------------------------------
-    # 2. generic fallback via all soil samples
+    # generic fallback
     # --------------------------------------------------
+
     samples = run.runoffdb.get_soil_samples_of_run(run)
 
     for ss in samples:
-        record = get_best_record_of_unit(
+
+        record, child_trace = get_best_record_of_unit(
             owner=ss,
             unit_id=allowed_units,
             phenomenon_id=phenomenon_id,
         )
 
+        if child_trace:
+            root_trace.traces.append(child_trace)
+
         if not record:
             continue
 
-        if not record_matches_units(
-            record,
-            allowed_unit_ids=allowed_units,
-        ):
+        if not record_matches_units(record, allowed_unit_ids=allowed_units):
             continue
 
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.DEDICATION_MISSING,
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.DEDICATION_MISSING,
+                source="get_best_soil_dedicated_record",
+                details="soil property record found on non-dedicated soil sample",
+                severity=IssueSeverity.INFO
+                ),
+            )
+
+        root_trace.details = "generic soil record selected"
+
+        return record, root_trace
+
+    # --------------------------------------------------
+    # nothing found
+    # --------------------------------------------------
+
+    root_trace.success = False
+    root_trace.issues.append(
+        DataIssue(
+            reason=DataAbsenceReason.NO_RECORD,
             source="get_best_soil_dedicated_record",
-            details=("soil property record found on non-dedicated soil sample"
-            ),
-        ))
+            details="no suitable soil record found",
+        )
+    )
 
-        return (record, tuple(issues)) if return_trace else record
-
-    # --------------------------------------------------
-    # 3. nothing found
-    # --------------------------------------------------
-    return (None, tuple(issues)) if return_trace else None
+    return None, root_trace
 
 
 def get_best_soil_texture_record(
     *,
     run: "Run",
-    return_trace: bool = False,
 ):
     return get_best_soil_dedicated_record(
         run=run,
@@ -166,7 +186,6 @@ def get_best_soil_texture_record(
             PARTICLE_SIZE_THRESHOLD_MM_UNIT_ID,
         ],
         phenomenon_id=PARTICLE_SIZE_DISTRIBUTION_PHEN_ID,
-        return_trace=return_trace,
     )
 
 
@@ -179,57 +198,71 @@ def get_best_soil_texture_data(
     limits: Optional[Iterable[float]] = None,
     return_int: bool = False,
     return_cumulative: bool = False,
-    return_trace: bool = True,
-) -> Optional[pd.DataFrame]:
-    """
-    Returns best available soil texture data for a run.
+):
 
-    - prefers dedicated texture sample
-    - falls back to best generic texture record
-    - optionally interpolates to given limits
-    """
+    root_trace = create_trace(
+        source="get_best_soil_texture_data",
+        owner=run,
+        variable="soil_texture",
+        details="soil texture resolution",
+    )
 
     order_by = order_by or DB_2ND_DIM_VALUE_COLUMN
-    issues: list[DataIssue] = []
 
-    texture_record, sub_issues = get_best_soil_texture_record(run=run, return_trace=return_trace)
+    # --------------------------------------------------
+    # resolve record
+    # --------------------------------------------------
+
+    texture_record, record_trace = get_best_soil_texture_record(
+        run=run,
+    )
+
+    root_trace.traces.append(record_trace)
 
 
     if texture_record is None:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_best_soil_texture_data",
-            details="No soil texture record found for run or related soil samples",
-            causes=sub_issues
-        ))
-        return (None, tuple(issues)) if return_trace else None
 
-    if sub_issues:
-        issues.extend(sub_issues)
+        root_trace.success = False
+        root_trace.details = "no soil texture record found"
 
-    df, sub_issues = get_record_data(
+        return None, root_trace
+
+    # --------------------------------------------------
+    # load data
+    # --------------------------------------------------
+
+    df, data_trace = get_record_data(
         record=texture_record,
         target_unit_id=CUMULATIVE_MASS_CONTENT_PERC_UNIT_ID,
         value_label=x_label,
         related_x_label=y_label,
         order_by=order_by,
-        return_trace=return_trace)
+    )
 
+    record_trace.traces.append(data_trace)
 
     if df is None or df.empty:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_DATA_IN_RECORD,
-            source="get_best_soil_texture_data",
-            details=f"soil texture record ID {texture_record.id} contains no data",
-            causes=sub_issues
-        ))
-        return (None, tuple(issues)) if return_trace else None
 
-    if sub_issues:
-        issues.extend(sub_issues)
+        root_trace.success = False
 
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+                source="get_best_soil_texture_data",
+                details=(
+                    f"soil texture record #{texture_record.id} contains no data"
+                ),
+            )
+        )
+
+        return None, root_trace
+
+    # --------------------------------------------------
+    # interpolation
+    # --------------------------------------------------
     if limits:
-        df = interpolate_texture(
+
+        df, interpolation_trace = interpolate_texture(
             original_texture=df,
             new_limits=limits,
             cum_mass_col_name=x_label,
@@ -237,118 +270,164 @@ def get_best_soil_texture_data(
             return_cumulative=return_cumulative,
         )
 
-    return (df, tuple(issues) if issues else None) if return_trace else df
+        data_trace.traces.append(interpolation_trace)
+
+    return df, root_trace
 
 
 def get_best_bulk_density_value(
     *,
     run: "Run",
-    target_unit_id = None,
+    target_unit_id: int | None = None,
     multi_value: bool = False,
-    return_trace: bool = False,
 ):
-    issues: list[DataIssue] = []
 
-    record, sub_issues = get_best_soil_dedicated_record(
+    root_trace = create_trace(
+        source="get_best_bulk_density_value",
+        owner=run,
+        variable="bulk_density",
+        details="bulk density resolution",
+    )
+
+    record, rec_trace = get_best_soil_dedicated_record(
         run=run,
         dedicated_ss_attr="bulkd_ss_id",
         dedicated_rec_attr="bulk_density_id",
         allowed_units=BULK_DENSITY_UNITS,
         phenomenon_id=PHYSICAL_SOIL_PROPERTIES_PHEN_ID,
-        return_trace=return_trace,
     )
+
+    root_trace.traces.append(rec_trace)
+
     if not record:
-        issues.append(DataIssue(
-            reason=DataAbsenceReason.NO_RECORD,
-            source="get_best_bulk_density_value",
-            details="No bulk density record found for run and related soil samples",
-            causes=sub_issues
-        ))
-        return (None, tuple(issues)) if return_trace else None
+        root_trace.success = False
+        root_trace.details = "no bulk density record found"
+        return None, root_trace
 
-    if sub_issues:
-        issues.extend(sub_issues)
 
-    value, sub_issues = get_record_scalar_value(
+    value, value_trace = get_record_scalar_value(
         record=record,
         target_unit_id=target_unit_id,
         value_label="bulk_density",
         multi_value=multi_value,
-        return_trace=return_trace,
     )
 
-    if sub_issues:
-        issues.extend(sub_issues)
+    rec_trace.traces.append(value_trace)
 
-    return (value, tuple(issues)) if return_trace else value
+    if value is None:
+        root_trace.success = False
+
+    return value, root_trace
 
 def interpolate_texture(
-        original_texture,
-        new_limits,
-        cum_mass_col_name,
-        return_cumulative=True,
-        return_int=True,
-        smallest_content=1
-    ):
+    *,
+    original_texture,
+    new_limits,
+    cum_mass_col_name,
+    return_cumulative=True,
+    return_int=True,
+    smallest_content=1,
+):
 
     import pandas as pd
 
-    # ensure original_texture is a pandas DataFrame
-    if not isinstance(original_texture, pd.DataFrame):
-        raise TypeError("original_texture parameter value must be a pandas DataFrame")
+    root_trace = create_trace(
+        source="interpolate_texture",
+        owner=original_texture,
+        variable="soil_texture",
+        details="texture interpolation",
+    )
 
-    # get column names from the input DataFrame
+    # --------------------------------------------------
+    # validate input
+    # --------------------------------------------------
+
+    if not isinstance(original_texture, pd.DataFrame):
+
+        root_trace.success = False
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.INVALID_VALUES,
+                source="interpolate_texture",
+                details="input texture is not a pandas DataFrame",
+            )
+        )
+
+        return None, root_trace
+
+    # --------------------------------------------------
+    # interpolation
+    # --------------------------------------------------
+
     particle_size_col = original_texture.index.name
 
-    # extract original limits and cumulative contents from the DataFrame
     original_limits = original_texture.index.to_list()
     original_contents = original_texture[cum_mass_col_name].to_list()
 
-    # insert artificial first datapoint with the smallest content to allow for interpolation of smaller particles content
     original_limits.insert(0, 0)
     original_contents.insert(0, smallest_content)
 
-    # sort the new limits
     new_limits = sorted(new_limits)
 
     cumul_contents = []
 
-
     for nl in new_limits:
-        i = 0
-        for ol, content in zip(original_limits, original_contents):
-            if i == 0:
-                prev_ol = ol
-                prev_content = content
-            else:
-                if nl > prev_ol and nl <= ol:
-                    new_value = prev_content + ((content - prev_content) / (ol - prev_ol)) * (nl - prev_ol)
+
+        prev_ol = None
+        prev_content = None
+
+        for ol, content in zip(
+            original_limits,
+            original_contents,
+        ):
+
+            if prev_ol is not None:
+
+                if prev_ol < nl <= ol:
+
+                    new_value = (
+                        prev_content + ((content - prev_content) / (ol - prev_ol)) * (nl - prev_ol)
+                    )
+
                     cumul_contents.append(new_value)
-                prev_ol = ol
-                prev_content = content
-            i += 1
+                    break
 
-    # round the content values to integers if requested
+            prev_ol = ol
+            prev_content = content
+
     if return_int:
-        cumul_contents = [round(val) for val in cumul_contents]
+        cumul_contents = [round(v) for v in cumul_contents ]
 
-    # recalculate cumulative values to net values if requested
     if not return_cumulative:
-        net_contents = [cumul_contents[0]]
-        for j in range(1, len(cumul_contents)):
-            net_contents.append(cumul_contents[j] - cumul_contents[j - 1])
-        output_contents = net_contents
+
+        output_contents = [cumul_contents[0]]
+
+        for i in range(1, len(cumul_contents)):
+            output_contents.append(cumul_contents[i] - cumul_contents[i - 1])
+
     else:
         output_contents = cumul_contents
 
-    # create the output DataFrame with the same column names as the input DataFrame
+    output_df = pd.DataFrame(
+        {
+            particle_size_col: new_limits,
+            cum_mass_col_name: output_contents,
+        }
+    )
 
-    output_df = pd.DataFrame({
-        particle_size_col: new_limits,
-        cum_mass_col_name: output_contents
-    })
+    output_df.set_index(
+        particle_size_col,
+        inplace=True,
+    )
 
-    # set particle_size as the index
-    output_df.set_index(particle_size_col, inplace=True)
+    root_trace.details = (
+        f"interpolated {len(new_limits)} particle size limits"
+    )
 
-    return output_df
+    # trace.metadata = {
+    #     "return_cumulative": return_cumulative,
+    #     "return_int": return_int,
+    #     "smallest_content": smallest_content,
+    # }
+
+    return output_df, root_trace

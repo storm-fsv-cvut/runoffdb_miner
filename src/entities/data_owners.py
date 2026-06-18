@@ -33,13 +33,13 @@ class RecordOwner:
 
     runoffdb: "RunoffDB"
 
-    def get_records(self, unit_id=None,
+    def get_records(self, unit_id: int | list[int] | None = None,
                     phenomenon_id=None,
                     record_type_id=None,
                     related_value_x_unit_id=None,
                     related_value_y_unit_id=None,
                     related_value_z_unit_id=None,
-                    exclude_missing_records=False):
+                    exclude_missing_records=True):
 
         out = []
         # get the measurements related to RecordOwner instance, pass on the argument
@@ -49,32 +49,19 @@ class RecordOwner:
             return None
 
         # if any measurements like that exist
-        if measurements:
+        else:
             for meas in measurements:
                 # load the records of measurement, pass on the arguments
                 # records of all unit IDs are in the obtained list if unit is a list
-                recs = meas.get_records(unit_id, record_type_id, related_value_x_unit_id, related_value_y_unit_id, related_value_z_unit_id, exclude_missing_records)
+                recs = meas.get_records(unit_id,
+                                        record_type_id,
+                                        related_value_x_unit_id,
+                                        related_value_y_unit_id,
+                                        related_value_z_unit_id,
+                                        exclude_missing_records)
 
                 # if any records like that exist
                 if recs:
                     out.extend(recs)
             # return None if the out list is empty
             return out or None
-        else:
-            return None
-
-    def best_record_of_unit(self, **kwargs):
-        """
-        Convenient access wrapper
-        """
-        # import at call to avoid circular import!
-        from ..services.record_resolution import get_best_record_of_unit
-        return get_best_record_of_unit(owner=self, **kwargs)
-
-    def resolve_record(self, **kwargs):
-        """
-        Convenient access wrapper
-        """
-        # import at call to avoid circular import!
-        from ..services.record_resolution import resolve_dedicated_or_generic_record
-        return resolve_dedicated_or_generic_record(owner=self, **kwargs)
