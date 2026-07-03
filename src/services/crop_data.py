@@ -54,10 +54,10 @@ def get_crop_height_value(
 ) -> tuple[float | None, DataTrace]:
 
     # for the cultivated fallow always return None
-    root_trace = DataTrace(
+    root_trace = create_trace(
         variable="crop_height",
         source="get_crop_height_value",
-        success=True,
+        owner=run,
     )
     if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
         root_trace.details = f"crop height irrelevant for 'cultivated fallow'"
@@ -97,10 +97,10 @@ def get_surface_cover_value(
 ) -> tuple[float | None, DataTrace]:
 
     # for the cultivated fallow always return 0
-    root_trace = DataTrace(
+    root_trace = create_trace(
         variable="surface_cover",
         source="get_surface_cover_value",
-        success=True,
+        owner=run,
     )
     if run.crop_id == CULTIVATED_FALLOW_CROP_ID:
         root_trace.details = f"surface cover assumed 0 'cultivated fallow'"

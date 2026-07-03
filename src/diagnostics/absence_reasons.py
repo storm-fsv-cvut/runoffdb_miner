@@ -8,7 +8,7 @@ class DataAbsenceReason(Enum):
     REFERENCED_RECORD_NOT_FOUND = auto()
     REFERENCED_ENTITY_NOT_FOUND = auto()
     NO_GENERIC_RECORD = auto()
-    RECORD_SET_NOT_AVAILABLE = auto()
+    NO_RECORD_IN_SET_AVAILABLE = auto()
     NO_DATA_IN_RECORD = auto()
     DATA_NOT_AVAILABLE = auto()
     DEDICATION_MISSING = auto()  # for properties that should be assigned as dedicated but are not (desired unit record found but is not as dedicated

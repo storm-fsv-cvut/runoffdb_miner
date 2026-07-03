@@ -84,7 +84,7 @@ class Plot:
         )
 
         if not self.protection_measures:
-            trace.details = f"no protection measure assigned to plot #{self.id}"
+            trace.details = f"plot has no protection measure assigned"
             return None, trace
 
         values = []
@@ -489,6 +489,9 @@ class Unit:
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
 
+    def __str__(self):
+        return f"{self.name_en} [{self.unit}]"
+
     def get_name(self, lang="en"):
         return resolve_translated_field(
             owner=self,
@@ -768,6 +771,9 @@ class Phenomenon:
 
         self.name = {"cz": self.name_cz, "en": self.name_en}
         self.description = {"cz": self.description_cz, "en": self.description_en}
+
+    def __str__(self):
+        return self.name_en
 
     def get_name(self, lang="en"):
         return resolve_translated_field(

@@ -22,14 +22,28 @@ def get_best_record_of_unit(
 
     view_order = view_order or DEFAULT_RECORD_TYPE_PRIORITY
 
-    base_trace = create_trace(
+    units = owner.runoffdb.units
+    phenomena = owner.runoffdb.phenomena
+
+    # get units names and units for the trace
+    if isinstance(unit_id, list) or isinstance(unit_id, tuple):
+        units_string = "/ ".join([str(units[uid]) for uid in unit_id])
+    else:
+        units_string = str(units[unit_id])
+
+    #
+    if phenomenon_id:
+        phenomenon_string = f" ({phenomena[phenomenon_id]})"
+    else:
+        phenomenon_string = f" (phenomenon not specified)"
+
+    trace = create_trace(
         source="get_best_record_of_unit",
         owner=owner,
-        details=f"requested unit_id={unit_id} (phenomenon_id={phenomenon_id})",
+        details=f"requested: {units_string}{phenomenon_string}",
     )
 
     for record_type in view_order:
-
         records = owner.get_records(
             unit_id,
             phenomenon_id,
@@ -48,31 +62,21 @@ def get_best_record_of_unit(
 
             record = matches[0]
 
-            step_trace = create_trace(
-                source="get_best_record_of_unit",
-                owner=owner,
-                details=f"selected record {record.id} (type={record_type}, qi={qi})",
-                # metadata={
-                #     "record_id": record.id,
-                #     "quality_index": qi,
-                #     "record_type": record_type,
-                # },
-            )
+            trace.details += f", selected record #{record.id} ({owner.runoffdb.record_types[record_type].name_en}, quality={qi})"
 
             if qi is None:
-                step_trace.issues.append(
+                trace.issues.append(
                     DataIssue(
                         reason=DataAbsenceReason.INVALID_VALUES,
-                        details=f"record {record.id} has NULL quality index",
+                        details=f"record #{record.id} has NULL quality index",
                         severity=IssueSeverity.WARNING,
                     )
                 )
 
-            base_trace.traces.append(step_trace)
-            return record, base_trace
+            return record, trace
 
-    base_trace.success = False
-    base_trace.issues.append(
+    trace.success = False
+    trace.issues.append(
         DataIssue(
             reason=DataAbsenceReason.NO_RECORD,
             details="no matching record found",
@@ -80,7 +84,7 @@ def get_best_record_of_unit(
         )
     )
 
-    return None, base_trace
+    return None, trace
 
 
 def resolve_dedicated_or_generic_record(
@@ -91,9 +95,6 @@ def resolve_dedicated_or_generic_record(
     phenomenon_id: int | None = None,
     view_order: list[int] | None = None,
 ) -> tuple["Record | None", DataTrace]:
-
-    owner_id = getattr(owner, "id", None)
-    owner_class = type(owner).__name__
 
     root_trace = create_trace(
         source="resolve_dedicated_or_generic_record",
@@ -198,7 +199,6 @@ def get_record_data(
     root_trace = create_trace(source="get_record_data",
                               owner=record,
                               variable=f"record {record.id} as '{value_label}'",
-                              details="record data retrieval pipeline"
                               )
 
     # --------------------------------------------------
@@ -216,6 +216,7 @@ def get_record_data(
 
     if df is None:
         root_trace.success = False
+        root_trace.details = "record data retrieval pipeline failed"
         root_trace.traces.append(load_trace)
 
         return df, root_trace
@@ -245,6 +246,7 @@ def get_record_data(
 
         if not conversion_trace.success:
             root_trace.success = False
+            root_trace.details = "record data retrieval pipeline failed"
             root_trace.traces.append(conversion_trace)
 
             return None, root_trace
@@ -264,7 +266,7 @@ def get_record_data(
     # --------------------------------------------------
     # attach deepest successful step
     # --------------------------------------------------
-
+    root_trace.details = "record data retrieval pipeline successful"
     root_trace.traces.append(current_trace)
 
     return df, root_trace
@@ -280,7 +282,7 @@ def load_dataframe(
 ):
     root_trace = create_trace(
         source="load_dataframe",
-        variable=f"record {record.id}",
+        variable=f"record {record.id} as '{value_label}'",
         owner=record,
     )
 
@@ -297,7 +299,7 @@ def load_dataframe(
     except Exception as exc:
 
         root_trace.success = False
-        root_trace.details = f"loading data of record {record.id} failed",
+        root_trace.details = f"loading data of record #{record.id} failed",
 
         root_trace.issues.append(
             DataIssue(
@@ -312,7 +314,7 @@ def load_dataframe(
     if df.empty:
 
         root_trace.success = False
-        root_trace.details = f"loading data of record {record.id} failed",
+        root_trace.details = f"loading data of record #{record.id} failed",
 
         root_trace.issues.append(
             DataIssue(
@@ -324,7 +326,7 @@ def load_dataframe(
 
         return None, root_trace
 
-    root_trace.details = f"loaded data of record {record.id}"
+    root_trace.details = f"loaded data of record #{record.id} as '{value_label}'"
 
     return df, root_trace
 

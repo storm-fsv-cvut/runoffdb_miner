@@ -1,6 +1,6 @@
 # from pipeline import Miner
 from src.setup.entity_ids import *
-from src.export.schemas.column_sets import *
+from src.export.schemas.run_properties_columns import *
 from .filesystem import *
 from .writers import *
 from ..diagnostics.collector import TraceCollector
@@ -92,7 +92,7 @@ def fetch_hydro_sediment_df(run,
                             interpolations,
                             collector,
                             dataset_name):
-    hydro_df, trace = get_best_hydro_data(
+    hydro_df, trace = get_hydro_sediment_timeline(
         run=run,
         request_map=request,
         # labels_map=labels,
@@ -196,7 +196,7 @@ def calculate_SLR(
 
     collector = TraceCollector()
 
-    run_headers = [resolve_header_of_column(c, var_registry, lang) for c in RUN_LEVEL_COLUMNS]
+    run_headers = [resolve_header_of_column(c, var_registry, lang) for c in RUN_PROPERTIES]
     slr_headers = [resolve_header_of_column(c, var_registry, lang) for c in SLR_COLUMNS]
 
     try:
@@ -287,7 +287,7 @@ def calculate_SLR(
 
 
                     # get basic info for the crop run
-                    for col in RUN_LEVEL_COLUMNS:
+                    for col in RUN_PROPERTIES:
                         # try:
                         val, issues = col.getter(run, ctx)
                         f_val, f_issues = col.getter(frun, ctx)

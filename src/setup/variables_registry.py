@@ -15,6 +15,9 @@ class VariableRegistry:
     def __getitem__(self, key: str) -> VariableDefinition:
         return self._vars[key]
 
+    def __contains__(self, key):
+        return key in self._vars
+
     def keys(self):
         return self._vars.keys()
 

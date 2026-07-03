@@ -11,7 +11,6 @@ from src.diagnostics.trace import DataTrace, create_trace
 from src.diagnostics.issue import DataIssue
 from src.diagnostics.severity import IssueSeverity
 
-# public API
 
 def get_best_soil_dedicated_record(
     *,
@@ -26,7 +25,6 @@ def get_best_soil_dedicated_record(
         source="get_best_soil_dedicated_record",
         owner=run,
         variable=f"{dedicated_ss_attr}-{dedicated_rec_attr}",
-        details="soil record resolution",
     )
 
     if not isinstance(allowed_units, (list, tuple, set)):
@@ -45,11 +43,12 @@ def get_best_soil_dedicated_record(
         if not isinstance(ss, SoilSample):
 
             root_trace.success = False
+            root_trace.details = "soil record resolution failed",
             root_trace.issues.append(
                 DataIssue(
                     reason=DataAbsenceReason.REFERENCED_ENTITY_NOT_FOUND,
-                    source="get_best_soil_dedicated_record",
-                    details=f"soil sample #{ss_id} referenced by {dedicated_ss_attr} was not found"
+                    details=f"soil sample #{ss_id} referenced by {dedicated_ss_attr} was not found",
+                    severity=IssueSeverity.ERROR
                 )
             )
 
@@ -58,16 +57,16 @@ def get_best_soil_dedicated_record(
         rec_id = getattr(ss, dedicated_rec_attr, None)
 
         if rec_id:
-
             record = run.runoffdb.load_record_by_id(rec_id)
 
             if not record:
-
                 root_trace.success = False
+                root_trace.details = "soil record resolution failed",
                 root_trace.issues.append(
                     DataIssue(
                         reason=DataAbsenceReason.REFERENCED_RECORD_NOT_FOUND,
-                        source=f"record #{rec_id} referenced by {dedicated_rec_attr} was not found",
+                        severity=IssueSeverity.ERROR,
+                        details=f"record #{rec_id} referenced by {dedicated_rec_attr} was not found"
                     )
                 )
 
@@ -75,19 +74,15 @@ def get_best_soil_dedicated_record(
 
             if record.phenomenon_id != phenomenon_id:
                 root_trace.success = False
+                root_trace.details = "soil record resolution failed",
                 root_trace.issues.append(
                     DataIssue(
                         reason=DataAbsenceReason.INVALID_RECORD_TYPE,
-                        source="get_best_soil_dedicated_record",
-                        details=(
-                            f"record {record.id} has phenomenon "
-                            f"{record.phenomenon_id}, expected {phenomenon_id}"
-                        ),
+                        details=f"record {record.id} has phenomenon {record.phenomenon_id}, expected {phenomenon_id}"
+                        )
                     )
-                )
 
                 return None, root_trace
-
 
             if not record_matches_units(
                 record,
@@ -95,31 +90,26 @@ def get_best_soil_dedicated_record(
             ):
 
                 root_trace.success = False
+                root_trace.details = "soil record resolution failed",
                 root_trace.issues.append(
                     DataIssue(
                         reason=DataAbsenceReason.INCOMPATIBLE_UNIT_SET,
-                        source="get_best_soil_dedicated_record",
-                        details=f"record {record.id} has incompatible units",
+                        details=f"record #{record.id} has incompatible units",
                     )
                 )
 
                 return None, root_trace
 
-
             root_trace.details = "dedicated soil record selected"
             return record, root_trace
-
 
         root_trace.issues.append(
             DataIssue(
                 reason=DataAbsenceReason.RECORD_NOT_ASSIGNED,
-                source="get_best_soil_dedicated_record",
-                details=(
-                    f"SoilSample {ss_id} has no {dedicated_rec_attr}"
-                ),
+                details=f"SoilSample {ss_id} has no {dedicated_rec_attr}",
+                severity=IssueSeverity.INFO
             )
         )
-
 
     # --------------------------------------------------
     # generic fallback
@@ -147,7 +137,6 @@ def get_best_soil_dedicated_record(
         root_trace.issues.append(
             DataIssue(
                 reason=DataAbsenceReason.DEDICATION_MISSING,
-                source="get_best_soil_dedicated_record",
                 details="soil property record found on non-dedicated soil sample",
                 severity=IssueSeverity.INFO
                 ),
@@ -162,11 +151,12 @@ def get_best_soil_dedicated_record(
     # --------------------------------------------------
 
     root_trace.success = False
+    root_trace.details = "soil record resolution failed",
     root_trace.issues.append(
         DataIssue(
             reason=DataAbsenceReason.NO_RECORD,
-            source="get_best_soil_dedicated_record",
             details="no suitable soil record found",
+            severity=IssueSeverity.INFO
         )
     )
 
@@ -244,14 +234,12 @@ def get_best_soil_texture_data(
     if df is None or df.empty:
 
         root_trace.success = False
-
+        root_trace.details="soil texture resolution failed",
         root_trace.issues.append(
             DataIssue(
                 reason=DataAbsenceReason.NO_DATA_IN_RECORD,
-                source="get_best_soil_texture_data",
-                details=(
-                    f"soil texture record #{texture_record.id} contains no data"
-                ),
+                details=f"soil texture record #{texture_record.id} contains no data",
+                severity=IssueSeverity.ERROR
             )
         )
 
@@ -333,9 +321,7 @@ def interpolate_texture(
 
     root_trace = create_trace(
         source="interpolate_texture",
-        owner=original_texture,
         variable="soil_texture",
-        details="texture interpolation",
     )
 
     # --------------------------------------------------
@@ -345,11 +331,12 @@ def interpolate_texture(
     if not isinstance(original_texture, pd.DataFrame):
 
         root_trace.success = False
+        root_trace.details = "texture interpolation failed",
         root_trace.issues.append(
             DataIssue(
                 reason=DataAbsenceReason.INVALID_VALUES,
-                source="interpolate_texture",
                 details="input texture is not a pandas DataFrame",
+                severity=IssueSeverity.ERROR
             )
         )
 
@@ -421,7 +408,7 @@ def interpolate_texture(
     )
 
     root_trace.details = (
-        f"interpolated {len(new_limits)} particle size limits"
+        f"interpolated into {len(new_limits)} particle size limits [{', '.join([str(l) for l in new_limits])}]"
     )
 
     # trace.metadata = {

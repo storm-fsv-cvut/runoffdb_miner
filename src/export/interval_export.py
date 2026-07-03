@@ -1,14 +1,19 @@
 from datetime import datetime
 import os
-from src.export.schemas.column_sets import *
+
+from src.export.schemas.column_schemas import resolve_header_of_column
+from src.export.schemas.run_properties_columns import RUN_PROPERTIES
+from src.export.schemas.hydro_sediment_columns import HYDRO_SEDIMENT_INTERVALS
+from src.setup.variables_definition import VariableGroup
+
 from src.utilities.utilities import czech_date
 from src.export.writers import write_row_to_csv
-from src.services.hydro_data import get_best_hydro_data
+from src.services.hydro_data import get_hydro_sediment_timeline
 from src.export.filesystem import ensure_directory
 from src.filters.run_filter import RunFilter
 
 from src.diagnostics.issue import DataIssue
-from src.diagnostics.trace import DataTrace
+from src.diagnostics.trace import DataTrace, create_trace
 from src.diagnostics.absence_reasons import DataAbsenceReason
 from src.diagnostics.severity import IssueSeverity
 from src.diagnostics.report_collector import ReportCollector
@@ -55,18 +60,19 @@ def generate_interval_values_csv(
     labels = var_registry.default_labels()
     request = {k: False for k in labels}
 
+    # acquire column headers
     run_headers = [
         resolve_header_of_column(c, var_registry, lang)
-        for c in RUN_LEVEL_COLUMNS
+        for c in RUN_PROPERTIES
     ]
 
     interval_headers = [
         resolve_header_of_column(c, var_registry, lang)
-        for c in INTERVAL_LEVEL_COLUMNS
+        for c in HYDRO_SEDIMENT_INTERVALS
     ]
 
     # export level execution context
-    ctx = {
+    general_ctx = {
         "lang": lang,
         "no_data_value": no_data_value,
     }
@@ -74,17 +80,24 @@ def generate_interval_values_csv(
     try:
 
         with open(output_path, "w", encoding="utf-8") as output_csv:
-
+            # write the headers to output
             write_row_to_csv(
                 output_csv,
                 run_headers + interval_headers,
             )
 
             for run in runs:
+                # run specific cash for data
+                run_ctx = {}
+                # local context where the global context keys are directly accessible and includes run cash
+                local_ctx = {
+                    **general_ctx,
+                    "run_ctx": run_ctx,
+                }
 
                 print(
                     f"\n#{run.id} – {czech_date(run.datetime)} – "
-                    f"{run.locality.name} – {run.plot_id}"
+                    f"{run.locality.name} – [{run.plot_id}]"
                 )
 
                 # -------------------
@@ -96,9 +109,9 @@ def generate_interval_values_csv(
                             owner=run,
                             )
 
-                for col in RUN_LEVEL_COLUMNS:
+                for col in RUN_PROPERTIES:
 
-                    val, col_trace = col.getter(run, ctx)
+                    val, col_trace = col.getter(run, local_ctx)
 
                     if val is None:
                         val = no_data_value
@@ -112,36 +125,35 @@ def generate_interval_values_csv(
                 # hydro + sediment data
                 # -------------------
 
-                hydro_data, hydro_trace = get_best_hydro_data(
-                    run=run,
-                    request_map=request,
-                )
+                hydro_data, hydro_trace = get_hydro_sediment_timeline(run=run)
 
                 hydro_data = hydro_data.infer_objects(copy=False)
 
+                print(hydro_data)
                 if hydro_trace:
                     run_trace.traces.append(hydro_trace)
 
-                # -------------------
-                # interval rows
-                # -------------------
-                state = {
+                # prepare interval context dict
+                interval_ctx = {
                     "i": 1,
                     "prev_index": None,
                     "index": None,
                 }
+                # put it inside run context
+                run_ctx["interval_ctx"] = interval_ctx
 
                 for index, row in hydro_data.iterrows():
-                    state["index"] = index
+
+                    interval_ctx["index"] = index
+
                     interval_values = []
 
-                    for col in INTERVAL_LEVEL_COLUMNS:
-                        val, col_trace = col.getter(run, row, ctx, state)
+                    for col in HYDRO_SEDIMENT_INTERVALS:
+
+                        val = col.getter(run, row, local_ctx,)
 
                         if val is None:
                             val = no_data_value
-                        if col_trace:
-                            run_trace.traces.append(col_trace)
 
                         interval_values.append(val)
 
@@ -150,8 +162,8 @@ def generate_interval_values_csv(
                         run_line + interval_values,
                     )
 
-                    state["prev_index"] = index
-                    state["i"] += 1
+                    interval_ctx["prev_index"] = index
+                    interval_ctx["i"] += 1
 
                 report.add_trace(run_trace)
 

@@ -1455,7 +1455,7 @@ class Miner:
                     line = run.get_info_array(no_data_value=no_data_value, lang=lang)[0]
 
                     try:
-                        crop_hydrodata = run.get_best_hydro_data(request_map=request, labels_map=labels, interpolation_map=interpolations)
+                        crop_hydrodata = run.get_hydro_sediment_timeline(request_map=request, labels_map=labels, interpolation_map=interpolations)
                         # if crop_hydrodata is None or crop_hydrodata[sed_yield_label].empty:
                         #     continue
                     except RecordSetNotComplete as e:
@@ -1533,7 +1533,7 @@ class Miner:
                         line2 = frun.get_info_array(no_data_value=no_data_value, lang=lang)[0]
 
                         try:
-                            fallow_hydrodata = frun.get_best_hydro_data(request_map=request, labels_map=labels, interpolation_map=interpolations)
+                            fallow_hydrodata = frun.get_hydro_sediment_timeline(request_map=request, labels_map=labels, interpolation_map=interpolations)
                         except RecordSetNotComplete as e:
                             print(f"\n\n\033[91mHydro-sediment record set of fallow run #{frun.id} is not complete\033[00m")
                             print(f"\033[91mmissing record{'s' if len(e.missing_records) > 1 else ''}: {', '.join(e.missing_records)}\033[00m")

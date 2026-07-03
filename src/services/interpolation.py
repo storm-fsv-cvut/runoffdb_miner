@@ -2,6 +2,8 @@ from ..exceptions import RequestedTimeDeltaValueMissing
 
 from src.diagnostics.report_collector import ReportCollector
 from src.diagnostics.issue import DataIssue
+from src.diagnostics.trace import DataTrace, create_trace
+from src.diagnostics.severity import IssueSeverity
 from src.diagnostics.absence_reasons import DataAbsenceReason
 
 import pandas as pd
@@ -10,46 +12,127 @@ from typing import Literal
 def interpolate_dataframe(
     df: pd.DataFrame,
     methods: dict[str, Literal["linear", "ffill"]],
-    *,
-    report: ReportCollector | None = None,
-) -> pd.DataFrame | tuple[pd.DataFrame, list["DataIssue"]]:
+) -> tuple[pd.DataFrame | None, DataTrace]:
     """
-    Interpolate DataFrame columns according to methods.
+    Interpolate DataFrame columns according to requested methods.
 
     Returns:
-    - DataFrame
-    - (DataFrame, [DataReport]) if return_traces=True
+        interpolated dataframe and trace describing the operation.
     """
 
+    trace = create_trace(
+        source="interpolate_dataframe",
+        dataset="hydro_sediment_data",
+    )
+
+    if df is None or df.empty:
+        trace.success = False
+        trace.details = "hydro-sediment dataframe assembly failed"
+        trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.INVALID_VALUES,
+                details="obtained empty dataframe for interpolation",
+                severity=IssueSeverity.WARNING,
+            )
+        )
+
+        return None, trace
+
     result = df.copy()
-    issues: dict[str: DataIssue] = {}
 
     for col, method in methods.items():
-        if col not in result:
+
+        if col not in result.columns:
+            pass
+        #     trace.issues.append(
+        #         DataIssue(
+        #             reason=DataAbsenceReason.NOT_REQUESTED,
+        #             details=f"column '{col}' not present for interpolation",
+        #             severity=IssueSeverity.INFO,
+        #         )
+        #     )
             continue
 
-        before_non_na = result[col].notna().sum()
+        before = result[col].notna().sum()
 
-        if method == "linear":
-            result[col] = (
-                pd.to_numeric(result[col], errors="coerce")
-                .interpolate(method="linear", limit_direction="forward")
-            )
-        elif method == "ffill":
-            result[col] = result[col].ffill()
+        try:
 
-        after_non_na = result[col].notna().sum()
+            if method == "linear":
+                numeric = pd.to_numeric(
+                    result[col],
+                    errors="coerce",
+                )
 
-        # destructive interpolation (should be rare but critical)
-        if before_non_na > 0 and after_non_na == 0:
-            if report:
-                report.add_issue(
-                    reason=DataAbsenceReason.INTERPOLATION_FAILED,
-                    source="interpolate_dataframe",
-                    details=f"column '{col}' lost all values during interpolation",
+                # values lost during conversion
+                lost = (result[col].notna() & numeric.isna()).sum()
+
+                if lost:
+                    trace.issues.append(
+                        DataIssue(
+                            reason=DataAbsenceReason.INVALID_VALUES,
+                            details=f"column '{col}' contained {lost} non-numeric values converted to NaN",
+                            severity=IssueSeverity.WARNING,
+                        )
                     )
 
-    return result
+                result[col] = numeric.interpolate(
+                    method="linear",
+                    limit_direction="forward",
+                )
+
+            elif method == "ffill":
+                result[col] = result[col].ffill()
+
+            else:
+
+                trace.issues.append(
+                    DataIssue(
+                        reason=DataAbsenceReason.INVALID_VALUES,
+                        details=f"interpolation method '{method}' for '{col}' was not specified",
+                        severity=IssueSeverity.ERROR,
+                    )
+                )
+
+                trace.success = False
+                continue
+
+            after = result[col].notna().sum()
+
+            if before > 0 and after == 0:
+
+                trace.success = False
+
+                trace.issues.append(
+                    DataIssue(
+                        reason=DataAbsenceReason.INTERPOLATION_FAILED,
+                        details=f"column '{col}' lost all values during interpolation",
+                        severity=IssueSeverity.ERROR,
+                    )
+                )
+
+            elif after > before:
+                trace.traces.append(
+                    DataTrace(
+                        source="interpolation",
+                        variable=col,
+                        details=f"{method}: filled {after - before} values",
+                        success=True,
+                    )
+                )
+
+        except Exception as e:
+            trace.success = False
+            trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INTERPOLATION_FAILED,
+                    details=(
+                        f"interpolation failed for '{col}': {e}"
+                    ),
+                    severity=IssueSeverity.ERROR,
+                )
+            )
+
+    return result, trace
 
 
 def get_value_in_time(

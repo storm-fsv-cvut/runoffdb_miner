@@ -75,7 +75,7 @@ class DataTrace:
 def create_trace(
     *,
     source: str,
-    owner,
+    owner=None,
     details: str = None,
     variable: str = None,
     dataset: str = None,

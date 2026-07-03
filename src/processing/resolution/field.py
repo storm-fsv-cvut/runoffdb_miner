@@ -27,22 +27,15 @@ def resolve_translated_field(
 
         if available_langs:
             issue = DataIssue(
-                source=source,
                 severity=IssueSeverity.WARNING,
                 reason=DataAbsenceReason.MISSING_PROPERTY_TRANSLATION,
-                details=(
-                    f"No {field_name} in requested language ({lang}) "
-                    f"but exists in ({', '.join(available_langs)})"
-                ),
+                details=f"No {field_name} in requested language ({lang}) but exists in ({', '.join(available_langs)})",
             )
         elif mandatory:
             issue = DataIssue(
-                source=source,
                 severity=IssueSeverity.ERROR,
                 reason=DataAbsenceReason.MISSING_PROPERTY,
-                details=(
-                    f"No values found in any language for mandatory property {field_name} "
-                ),
+                details=f"No values found in any language for mandatory property {field_name}",
             )
 
         if not issue:

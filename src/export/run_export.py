@@ -34,8 +34,8 @@ def write_hydro_sediment_data_to_csv(run, output_path, lang, no_data_value, labl
     # all requests are False to get all runs
     request = {key: False for key in labels}
 
-    hydro_data = run.get_best_hydro_data(request_map=request,
-                                         labels_map=labels)
+    hydro_data = run.get_hydro_sediment_timeline(request_map=request,
+                                                 labels_map=labels)
 
 
     print(hydro_data)

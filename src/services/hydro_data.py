@@ -27,17 +27,13 @@ class DerivedDep:
     sources: tuple[str, ...]
     kind: str = "derived"
 
-def get_best_hydro_data(
+def get_hydro_sediment_timeline(
     *,
     run: "Run",
-    request_map: dict[str, bool] | None = None,
+    variables: list[str] | None = None,
     interpolation_map: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, DataTrace]:
-    """
-    Hydro + sediment assembly resolver with full trace support.
-    """
 
-    request_map = request_map or {}
     interpolation_map = interpolation_map or {}
 
     registry = run.runoffdb.variable_registry.subregistry_by_group(
@@ -52,182 +48,275 @@ def get_best_hydro_data(
         for k, v in default_interpolations.items()
     }
 
-    merged = pd.DataFrame()
-    resolved_cache: dict[str, bool] = {}
-
-    # ------------------------------------------------------------
-    # root trace for whole hydro assembly
-    # ------------------------------------------------------------
     root_trace = create_trace(
-        source="get_best_hydro_data",
-        details=f"run_id={run.id}",
+        source="get_hydro_sediment_timeline",
         owner=run,
         dataset="hydro_sediment_data",
+        details=f"run_id={run.id}",
     )
 
-    # ------------------------------------------------------------
-    # recursive resolver
-    # ------------------------------------------------------------
-    def resolve_variable(key: str, required: bool) -> bool:
+    resolve_trace = create_trace(
+        source="resolve_timeline_variables",
+        owner=run,
+    )
 
-        if key in resolved_cache:
-            return resolved_cache[key]
+    assembly_trace = create_trace(
+        source="assemble_timeline",
+        owner=run,
+    )
+
+    derivation_trace = create_trace(
+        source="derive_variables",
+        owner=run,
+    )
+
+    resolved_series: dict[str, pd.Series] = {}
+    derived_cache: dict[str, bool] = {}
+
+    if variables is None:
+        variables = list(registry.keys())
+
+    # =====================================================
+    # record variables
+    # =====================================================
+
+    def resolve_record_variable(key: str) -> bool:
+
+        if key in resolved_series:
+            return True
 
         var_def = registry[key]
 
-        # ========================================================
-        # 1. direct record
-        # ========================================================
-        record = None
+        if not any("record" in d for d in var_def.dependencies):
+            return False
 
-        if any("record" in d for d in var_def.dependencies):
+        record, record_trace = get_best_record_of_unit(
+            owner=run,
+            unit_id=var_def.allowed_unit_ids,
+            phenomenon_id=var_def.phenomenon_id,
+        )
 
-            record, record_trace = get_best_record_of_unit(
-                owner=run,
-                unit_id=var_def.allowed_unit_ids,
-                phenomenon_id=var_def.phenomenon_id,
+        if not record:
+            resolve_trace.traces.append(record_trace)
+            return False
+
+        if not record.is_timeline:
+
+            record_trace.success = False
+            record_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INVALID_VALUES,
+                    details=f"record for '{key}' is not timeline data",
+                    severity=IssueSeverity.WARNING,
+                )
             )
 
-            root_trace.traces.append(record_trace)
+            resolve_trace.traces.append(record_trace)
+            return False
 
-            if record:
+        df, data_trace = get_record_data(
+            record=record,
+            value_label=key,
+            target_unit_id=default_units.get(key),
+        )
 
-                if not record.is_timeline:
-                    resolved_cache[key] = False
-                    return False
+        # append the data trace to the last (and should be the only one) trace of the record traces
+        if record_trace.traces:
+            record_trace.traces[-1].traces.append(data_trace)
+        else:
+            record_trace.traces.append(data_trace)
 
-                df, data_trace = get_record_data(
-                    record=record,
-                    value_label=key,
-                    target_unit_id=default_units.get(key),
-                )
+        if df is None or df.empty:
+            record_trace.success = False
+            resolve_trace.traces.append(record_trace)
+            return False
 
-                root_trace.traces.append(data_trace)
+        series = df[key] if key in df.columns else df.iloc[:, 0]
+        series.name = key
 
-                if df is not None and not df.empty:
+        resolved_series[key] = series
 
-                    series = df[key] if key in df else df.iloc[:, 0]
-                    merged[key] = series
+        resolve_trace.traces.append(record_trace)
 
-                    resolved_cache[key] = True
-                    return True
+        return True
 
-        # ========================================================
-        # 2. derivation
-        # ========================================================
-        if var_def.derivation_func:
+    # =====================================================
+    # derived variables
+    # =====================================================
 
-            dependency_keys = []
-            for dep in var_def.dependencies:
-                dependency_keys.extend(dep.get("derived_from", []))
+    def derive_variable(key: str) -> bool:
+        print(f"key: {key}")
+        print(f"resolved cash keyes: {resolved_series.keys()}")
+        print(f"derived cash keyes: {derived_cache.keys()}")
 
-            for dep_key in dependency_keys:
-                ok = resolve_variable(dep_key, required)
-                if not ok:
-                    resolved_cache[key] = False
-                    return False
+        if key in merged.columns or key in resolved_series.keys():
+            return True
 
-            try:
-                var_def.derivation_func(merged)
+        if key not in registry:
+            derived_cache[key] = False
+            return False
 
-                deriv_trace = DataTrace(
-                    source="derivation",
-                    variable=key,
-                    details=f"derived via {var_def.derivation_func.__name__}",
-                    success=True,
-                )
+        var_def = registry[key]
 
-                root_trace.traces.append(deriv_trace)
+        if not var_def.derivation_func:
+            derived_cache[key] = False
+            return False
 
-            except Exception as e:
+        dependency_keys = []
 
-                error_trace = DataTrace(
-                    source="derivation",
-                    variable=key,
-                    details=f"derivation failed: {e}",
-                    success=False,
-                    issues=[
-                        DataIssue(
-                            reason=DataAbsenceReason.UNKNOWN,
-                            details=str(e),
-                            severity=IssueSeverity.ERROR,
-                        )
-                    ],
-                )
+        for dep in var_def.dependencies:
+            dependency_keys.extend(dep.get("derived_from", []))
 
-                root_trace.traces.append(error_trace)
+        unavailable_dependencies = []
 
-                resolved_cache[key] = False
-                return False
+        if len(dependency_keys) == 1:
+            all_dep_string = f"'{dependency_keys[0]}'"
+        else:
+            all_dep_string = f"{', '.join(dependency_keys)}"
 
-            if key in merged and merged[key].notna().any():
-                resolved_cache[key] = True
-                return True
+        for dep_key in dependency_keys:
+            if not derive_variable(dep_key):
+                derived_cache[key] = False
+                unavailable_dependencies.append(dep_key)
 
-        # ========================================================
-        # 3. not resolvable
-        # ========================================================
-        resolved_cache[key] = False
-        return False
+        if unavailable_dependencies:
+            trace = create_trace(
+                source="derivation",
+                owner=run,
+                variable=key,
+                success=False,
+                details=f"needed {'dependencies' if len(dependency_keys)>1 else 'dependency'}: {all_dep_string}"
+            )
 
-    # ------------------------------------------------------------
-    # 1. required variables
-    # ------------------------------------------------------------
-    for key, is_required in request_map.items():
+            if len(unavailable_dependencies) == 1:
+                dep_string = f"dependency '{unavailable_dependencies[0]}'"
+            else:
+                dep_string = f"dependencies {', '.join(unavailable_dependencies)}"
 
-        if not is_required:
-            continue
-
-        available = resolve_variable(key, required=True)
-
-        if not available:
-
-            root_trace.issues.append(
+            trace.issues.append(
                 DataIssue(
-                    reason=DataAbsenceReason.NO_RECORD,
-                    details=f"mandatory variable '{key}' unavailable",
+                    reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+                    details=f"{dep_string} missing for derived variable '{key}'",
+                    severity=IssueSeverity.WARNING,
+                )
+            )
+
+            derivation_trace.traces.append(trace)
+
+            return False
+
+        trace = create_trace(
+            source="derivation",
+            owner=run,
+            variable=key,
+            details=f"derived from {all_dep_string} via {var_def.derivation_func.__name__}",
+        )
+
+        try:
+            var_def.derivation_func(merged)
+            derivation_trace.traces.append(trace)
+            derived_cache[key] = True
+
+            return True
+
+        except Exception as e:
+
+            trace.success = False
+            trace.details = str(e)
+
+            trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.UNKNOWN,
+                    details=str(e),
                     severity=IssueSeverity.ERROR,
                 )
             )
 
-            root_trace.success = False
-            return pd.DataFrame(), root_trace
+            derivation_trace.traces.append(trace)
 
-    # ------------------------------------------------------------
-    # 2. optional variables
-    # ------------------------------------------------------------
-    for key in registry.keys():
+            derived_cache[key] = False
 
-        if key in resolved_cache:
+            return False
+
+    # =====================================================
+    # resolve timeline variables
+    # =====================================================
+
+    for key in variables:
+        if key not in registry:
             continue
 
-        resolve_variable(key, required=False)
+        resolve_record_variable(key)
 
-    # ------------------------------------------------------------
-    # 3. finalize
-    # ------------------------------------------------------------
-    if merged.empty:
+    if not resolved_series:
+
+        root_trace.success = False
+
         root_trace.issues.append(
             DataIssue(
-                reason=DataAbsenceReason.INVALID_VALUES,
-                details="no resolvable variables available",
+                reason=DataAbsenceReason.NO_RECORD_IN_SET_AVAILABLE,
+                details="no resolvable timeline variables",
                 severity=IssueSeverity.WARNING,
             )
         )
 
-        root_trace.success = False
-        return merged, root_trace
+        root_trace.traces.append(resolve_trace)
+
+        return pd.DataFrame(), root_trace
+
+    # =====================================================
+    # assemble common timeline
+    # =====================================================
+
+    merged = pd.concat(
+        resolved_series.values(),
+        axis=1,
+    )
 
     merged.index = pd.to_timedelta(merged.index)
     merged.sort_index(inplace=True)
 
-    merged = interpolate_dataframe(
+    merged, interpolation_trace = interpolate_dataframe(
         merged,
         interpolations,
     )
 
-    return merged, root_trace
+    assembly_trace.traces.append(interpolation_trace)
 
+    if merged is None:
+
+        assembly_trace.success = False
+
+        root_trace.success = False
+        root_trace.traces.extend([
+            resolve_trace,
+            assembly_trace,
+        ])
+
+        return pd.DataFrame(), root_trace
+
+    # =====================================================
+    # derive remaining variables
+    # =====================================================
+
+    for key in variables:
+
+        if key not in registry:
+            continue
+
+        derive_variable(key)
+
+    # =====================================================
+    # assemble final provenance tree
+    # =====================================================
+
+    root_trace.traces.append(resolve_trace)
+    root_trace.traces.append(assembly_trace)
+
+    if derivation_trace.traces or derivation_trace.issues:
+        root_trace.traces.append(derivation_trace)
+
+    return merged, root_trace
 
 def get_best_rainfall_intensity_record(
     *,
@@ -272,34 +361,36 @@ def get_rainfall_intensity_value(
     # resolve record
     # --------------------------------------------------
 
-    record, rec_trace = get_best_rainfall_intensity_record(
-        run=run,
-    )
+    record, record_trace = get_best_rainfall_intensity_record(run=run,)
 
     if not record:
         root_trace.success = False
         root_trace.details = "no rainfall intensity record found"
 
-        if rec_trace:
-            root_trace.traces.append(rec_trace)
+        if record_trace:
+            root_trace.traces.append(record_trace)
 
         return None, root_trace
 
-    current_trace = rec_trace
+    current_trace = record_trace
 
     # --------------------------------------------------
     # load / convert data
     # --------------------------------------------------
 
-    df, df_trace = get_record_data(
+    df, data_trace = get_record_data(
         record=record,
         value_label="rainfall_intensity",
         target_unit_id=target_unit_id,
     )
 
-    if df_trace:
-        df_trace.traces.append(current_trace)
-        current_trace = df_trace
+    if data_trace:
+        # append the data trace to the last (and should be the only one) trace of the record traces
+        if record_trace.traces:
+            record_trace.traces[-1].traces.append(data_trace)
+        else:
+            record_trace.traces.append(data_trace)
+        current_trace = data_trace
 
     if df is None or df.empty:
 

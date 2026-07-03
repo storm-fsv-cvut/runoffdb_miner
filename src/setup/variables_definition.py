@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, Callable
 from enum import Enum, auto
+import pandas as pd
 
 from .unit_ids import *
-from .derivations import *
+from ..services.integration import integrate_series
+
 
 class VariableGroup(Enum):
     HYDRO_SEDIMENT = auto()
@@ -92,6 +94,7 @@ class VariableDefinition:
 
         return f"VariableDefinition:\n{''.join(parts)}"
 
+
 # ---------------------------------------------------------
 # HYDRO & SEDIMENT
 # ------------------------------------------------------------------
@@ -116,7 +119,7 @@ DISCHARGE = VariableDefinition(
     aggregation=None,
     default_interpolation="linear",
     dependencies=({"derived_from": ["surface_runoff"]}, ),
-    derivation_func=derive_discharge
+    derivation_func=lambda df: integrate_series(df, "surface_runoff", "discharge", time_unit="minutes", shift_source=True)
 )
 
 SEDIMENT_CONCENTRATION = VariableDefinition(
@@ -140,7 +143,7 @@ SEDIMENT_FLUX = VariableDefinition(
     aggregation=None,
     default_interpolation="linear",
     dependencies=({"record": True}, {"derived_from": ["surface_runoff", "sediment_concentration"]}),
-    derivation_func=derive_sediment_flux,
+    derivation_func=lambda df: calculate_sediment_flux(df, "surface_runoff", "sediment_concentration", "sediment_flux"),
 )
 
 
@@ -152,8 +155,8 @@ SEDIMENT_YIELD = VariableDefinition(
     allowed_unit_ids=tuple(SEDIMENT_YIELD_UNITS),
     aggregation=None,
     default_interpolation="linear",
-    dependencies=({"derived_from": ["sediment_flux"]}, ),
-    derivation_func=derive_sediment_yield
+    dependencies=({"record": True}, {"derived_from": ["sediment_flux"]}, ),
+    derivation_func=lambda df: integrate_series(df, "sediment_flux", "sediment_yield", time_unit="minutes", shift_source=True)
 )
 
 RAINFALL_INTENSITY = VariableDefinition(
@@ -178,7 +181,7 @@ RAINFALL_TOTAL = VariableDefinition(
     aggregation=None,
     default_interpolation="linear",
     dependencies=({"derived_from": ["rainfall_intensity"]}, ),
-    derivation_func=derive_rainfall_total,
+    derivation_func=lambda df: integrate_series(df, "rainfall_intensity", "rainfall_total", time_unit="hours", shift_source=True),
 )
 
 
@@ -267,3 +270,11 @@ VARIABLE_REGISTRY = (
     CROP_DENSITY,
     SURFACE_COVER,
 )
+
+def calculate_sediment_flux(
+    df: pd.DataFrame,
+    surface_runoff_column: str,
+    sediment_concentration_column: str,
+    target_col: str,
+) -> None:
+    df[target_col] = (df[surface_runoff_column].fillna(0) * df[sediment_concentration_column].fillna(0)).replace(0, pd.NA)
