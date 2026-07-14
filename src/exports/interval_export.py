@@ -1,22 +1,23 @@
 from datetime import datetime
 import os
+from pandas import isna
 
-from src.export.schemas.column_schemas import resolve_header_of_column
-from src.export.schemas.run_properties_columns import RUN_PROPERTIES
-from src.export.schemas.hydro_sediment_columns import HYDRO_SEDIMENT_INTERVALS
+from src.schemas import resolve_header_of_column
+from src.schemas import RUN_PROPERTIES
+from src.schemas.hydro_sediment_columns import HYDRO_SEDIMENT_INTERVALS
 from src.setup.variables_definition import VariableGroup
 
 from src.utilities.utilities import czech_date
-from src.export.writers import write_row_to_csv
+from src.exports.writers import write_row_to_csv
 from src.services.hydro_data import get_hydro_sediment_timeline
-from src.export.filesystem import ensure_directory
+from src.exports.filesystem import ensure_directory
 from src.filters.run_filter import RunFilter
 
 from src.diagnostics.issue import DataIssue
 from src.diagnostics.trace import DataTrace, create_trace
 from src.diagnostics.absence_reasons import DataAbsenceReason
 from src.diagnostics.severity import IssueSeverity
-from src.diagnostics.report_collector import ReportCollector
+
 
 def generate_interval_values_csv(
     processing_result,
@@ -27,11 +28,13 @@ def generate_interval_values_csv(
     output_trace_path=None,
 ):
     """
-    Schema-driven interval export.
+    Schema-driven interval exports.
     """
 
     # report provided by engine
     report = processing_result.report
+    # policy provided by engine
+    policy = processing_result.policy
 
     runs = list(processing_result.data["runs"].values())
 
@@ -40,7 +43,7 @@ def generate_interval_values_csv(
 
         trace = DataTrace(
             source="generate_interval_values_csv",
-            details="retrieving runs for export",
+            details="retrieving runs for exports",
             issues=[DataIssue(
                 reason=DataAbsenceReason.NO_RUN_SELECTED,
                 details="no runs available matching used filter",
@@ -71,7 +74,7 @@ def generate_interval_values_csv(
         for c in HYDRO_SEDIMENT_INTERVALS
     ]
 
-    # export level execution context
+    # exports level execution context
     general_ctx = {
         "lang": lang,
         "no_data_value": no_data_value,
@@ -152,7 +155,7 @@ def generate_interval_values_csv(
 
                         val = col.getter(run, row, local_ctx,)
 
-                        if val is None:
+                        if val is None or isna(val):
                             val = no_data_value
 
                         interval_values.append(val)

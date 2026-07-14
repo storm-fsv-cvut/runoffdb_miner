@@ -3,14 +3,14 @@
 @author: Jan Devátý
 """
 
-# from src.export.testing import *
+# from src.exports.testing import *
 from datetime import datetime
 from src.entities.runoffdb import RunoffDB
 from src.processing.engine import ProcessingEngine
 from src.processing.request import ProcessingRequest
 from src.filters.run_filter import RunFilter
 from src.processing .policy import DataPolicy
-from src.export.interval_export import generate_interval_values_csv
+from src.exports.interval_export import generate_interval_values_csv
 from src.utilities.utilities import czech_date
 from src.project_structure import project_tree
 

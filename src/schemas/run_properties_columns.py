@@ -1,6 +1,4 @@
-from src.utilities.utilities import czech_date, format_timedelta
-
-from src.export.schemas.column_schemas import RunColumn, build_variable_header, resolve_header_of_column
+from src.schemas.column_schemas import RunColumn, build_variable_header
 from src.utilities.utilities import czech_date
 from src.services.soil_data import *
 from src.services.hydro_data import *
@@ -235,7 +233,7 @@ RUN_PROPERTIES: list[RunColumn] = [
             registry=registry,
             lang=lang,
         ),
-        getter=lambda r, ctx: get_rainfall_intensity_value(run=r),
+        getter=lambda r, ctx: get_rainfall_intensity_value(run=r, target_unit_id=RAINFALL_INTENSITY_MMH_UNIT_ID),
     ),
 ]
 

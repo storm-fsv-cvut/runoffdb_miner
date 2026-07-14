@@ -198,7 +198,7 @@ def get_record_data(
 
     root_trace = create_trace(source="get_record_data",
                               owner=record,
-                              variable=f"record {record.id} as '{value_label}'",
+                              variable=f"{value_label}",
                               )
 
     # --------------------------------------------------
@@ -216,7 +216,7 @@ def get_record_data(
 
     if df is None:
         root_trace.success = False
-        root_trace.details = "record data retrieval pipeline failed"
+        root_trace.details = "record data retrieval failed"
         root_trace.traces.append(load_trace)
 
         return df, root_trace
@@ -227,10 +227,7 @@ def get_record_data(
     # unit conversion
     # --------------------------------------------------
 
-    if (
-        target_unit_id is not None
-        and record.unit_id != target_unit_id
-    ):
+    if target_unit_id is not None and record.unit_id != target_unit_id:
 
         df, conversion_trace = convert_units(
             df=df,
@@ -239,14 +236,14 @@ def get_record_data(
             target_unit_id=target_unit_id,
         )
 
-        # append the last step_trace
+        # append the last step trace
         conversion_trace.traces.append(current_trace)
         # and make this the last step
         current_trace = conversion_trace
 
         if not conversion_trace.success:
             root_trace.success = False
-            root_trace.details = "record data retrieval pipeline failed"
+            root_trace.details = "record data retrieval failed"
             root_trace.traces.append(conversion_trace)
 
             return None, root_trace
@@ -263,10 +260,8 @@ def get_record_data(
         # and make this the last step
         current_trace = trim_trace
 
-    # --------------------------------------------------
-    # attach deepest successful step
-    # --------------------------------------------------
-    root_trace.details = "record data retrieval pipeline successful"
+    # attach deepest successful step trace
+    root_trace.details = "record data retrieval successful"
     root_trace.traces.append(current_trace)
 
     return df, root_trace
@@ -282,7 +277,7 @@ def load_dataframe(
 ):
     root_trace = create_trace(
         source="load_dataframe",
-        variable=f"record {record.id} as '{value_label}'",
+        variable=f"{value_label}",
         owner=record,
     )
 

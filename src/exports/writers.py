@@ -31,7 +31,7 @@ def write_all_run_records_to_csv(run, dir, lang, no_data_value):
         msrmnts = run.get_measurements(phid)
         if msrmnts is not None:
             for ms in msrmnts:
-                # loop through units and if record exists export it
+                # loop through units and if record exists exports it
                 for uid in run.runoffdb.get_all_units_ids():
                     rcrds = ms.get_records(unit_id=uid)
                     if rcrds is not None:

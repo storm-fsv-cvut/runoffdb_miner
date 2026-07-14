@@ -931,7 +931,7 @@ class Method:
         steps = {}
         for i, ps in enumerate(self.processing_steps_sequence, start=1):
             steps.update({i:ps.export_to_json(lang, include_ids)})
-        # export["processing steps"] = [ps.export_to_json(lang, include_ids) for ps in self.processing_steps_sequence]
+        # exports["processing steps"] = [ps.export_to_json(lang, include_ids) for ps in self.processing_steps_sequence]
         export["processing steps"] = steps
         return export
 

@@ -12,6 +12,7 @@ from src.services.record_resolution import *
 from src.diagnostics.absence_reasons import DataAbsenceReason
 
 from src.entities.run import Run
+from src.setup.variables_definition import describe_derivation
 from src.setup.variables_registry import *
 
 
@@ -145,9 +146,6 @@ def get_hydro_sediment_timeline(
     # =====================================================
 
     def derive_variable(key: str) -> bool:
-        print(f"key: {key}")
-        print(f"resolved cash keyes: {resolved_series.keys()}")
-        print(f"derived cash keyes: {derived_cache.keys()}")
 
         if key in merged.columns or key in resolved_series.keys():
             return True
@@ -209,7 +207,7 @@ def get_hydro_sediment_timeline(
             source="derivation",
             owner=run,
             variable=key,
-            details=f"derived from {all_dep_string} via {var_def.derivation_func.__name__}",
+            details=var_def.derivation_description
         )
 
         try:
@@ -453,6 +451,7 @@ def get_rainfall_intensity_value(
 
             return None, root_trace
 
+        print(f"values: {values}")
         root_trace.details = "rainfall regime classified as 'constant'"
         # root_trace.metadata = {
         #     "record_id": record.id,

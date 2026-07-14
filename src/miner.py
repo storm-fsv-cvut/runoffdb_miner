@@ -308,7 +308,7 @@ class Miner:
         """
 
         :param output_path: path of the output file
-        :param lang: language of the export
+        :param lang: language of the exports
         :param no_data_value: directory path for plots
         :param logfile_path:
         :return:
@@ -1341,7 +1341,7 @@ class Miner:
                    "SS concentration [g.l-1]", "SS flux [g.min-1]", "sediment yield[g]", "SLR", "SLR averaged"
                    ]
         }
-        # separators for the export to CSV
+        # separators for the exports to CSV
         local_seps = {"celld": {"cz": ";", "en": ","}, "decd": {"cz": ",", "en": "."}}
         #
         # # hydrodata request and labels definition
@@ -1422,7 +1422,7 @@ class Miner:
             return
         # get the run properties column headers from the first run
         values, headers = list(self.runs.values())[0].get_info_array(lang=lang)
-        # extend with export specific column headers
+        # extend with exports specific column headers
         headers.extend(column_headers[lang])
 
         writeRowToCSV(output_csv, headers)

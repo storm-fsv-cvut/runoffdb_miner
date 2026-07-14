@@ -1,4 +1,4 @@
-from src.processing.policy import DataPolicy
+from src.processing.policy import DataPolicy, ResolutionMode
 from src.processing.request import ProcessingRequest
 from src.processing.result import ProcessingResult
 from src.diagnostics.report_collector import ReportCollector
@@ -29,7 +29,7 @@ class ProcessingEngine:
                 "runs": runs,
                 "run_count": len(runs),
             },
-
+            policy=policy,
             report=self.report,
 
             metadata={
@@ -59,10 +59,7 @@ class ProcessingEngine:
 
             # first use measured values,
             # derive only if necessary
-            resolution_order=(
-                "direct",
-                "derived",
-            ),
+            resolution_mode=ResolutionMode.PREFER_DIRECT,
 
             # retain runs unless request explicitly requires removal
             skip_runs_missing_records=False,

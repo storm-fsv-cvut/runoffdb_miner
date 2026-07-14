@@ -1,12 +1,9 @@
 # from pipeline import Miner
-from src.setup.entity_ids import *
-from src.export.schemas.run_properties_columns import *
 from .filesystem import *
 from .writers import *
 from ..diagnostics.collector import TraceCollector
-import os
 from ..utilities.utilities import czech_date
-from ..utilities.plotters import *
+
 
 class SLRAccumulator:
     """
@@ -293,7 +290,7 @@ def calculate_SLR(
                         f_val, f_issues = col.getter(frun, ctx)
                         # except:
                         #     print(col.header[lang])
-                        # replace None value with export-specific no_data_value
+                        # replace None value with exports-specific no_data_value
                         if val is None:
                             val = ctx["no_data_value"]
 
