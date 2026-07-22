@@ -146,7 +146,6 @@ class Plot:
         # -----------------------------------------
         issue = DataIssue(
             reason=DataAbsenceReason.MISSING_PROPERTY,
-            source="Plot.get_days_since_seeding",
             details=f"plot #{self.id} has no agrotechnology assigned",
         )
 

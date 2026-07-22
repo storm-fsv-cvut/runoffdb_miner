@@ -13,6 +13,7 @@ class VariableGroup(Enum):
     HYDRO_SEDIMENT = auto()
     SOIL_PROPERTIES = auto()
     CROP_PROPERTIES = auto()
+    HYDRAULIC_CONDUCTIVITY_MODELING = auto()
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,7 @@ DISCHARGE = VariableDefinition(
     allowed_unit_ids=(DISCHARGE_VOLUME_L_UNIT_ID, ),
     aggregation=None,
     default_interpolation="linear",
-    dependencies=({"derived_from": ["surface_runoff"]}, ),
+    dependencies=({"derived_from": ["surface_runoff"]}, {"record": True}),
     derivation_func=partial(
         integrate_series,
         source_col="surface_runoff",
@@ -293,6 +294,43 @@ SURFACE_COVER = VariableDefinition(
 )
 
 # ------------------------------------------------------------------
+# HYDYRAULIC CONDUCTIVITY
+# ------------------------------------------------------------------
+
+SATURATED_HYDRAULIC_CONDUCTIVITY = VariableDefinition(
+    key="saturated_hydraulic_conductivity",
+    phenomenon_id=MODELED_HYDROPEDOLOGICAL_CHARACTERISTICS,
+    groups=(VariableGroup.HYDRAULIC_CONDUCTIVITY_MODELING, ),
+    default_unit_id=SATURATED_HYDRAULIC_CONDUCTIVITY_UNIT_ID,
+    allowed_unit_ids=(SATURATED_HYDRAULIC_CONDUCTIVITY_UNIT_ID, ),
+    aggregation=None,
+    default_interpolation="linear",
+    dependencies=({"record": True}, ),
+)
+
+EFFECTIVE_CAPILARY_DRIVE = VariableDefinition(
+    key="saturated_hydraulic_conductivity",
+    phenomenon_id=MODELED_HYDROPEDOLOGICAL_CHARACTERISTICS,
+    groups=(VariableGroup.HYDRAULIC_CONDUCTIVITY_MODELING, ),
+    default_unit_id=EFFECTIVE_CAPILARY_DRIVE_UNIT_ID,
+    allowed_unit_ids=(EFFECTIVE_CAPILARY_DRIVE_UNIT_ID, ),
+    aggregation=None,
+    default_interpolation="linear",
+    dependencies=({"record": True}, ),
+)
+
+PHILLIPS_SORPTIVITY = VariableDefinition(
+    key="saturated_hydraulic_conductivity",
+    phenomenon_id=MODELED_HYDROPEDOLOGICAL_CHARACTERISTICS,
+    groups=(VariableGroup.HYDRAULIC_CONDUCTIVITY_MODELING, ),
+    default_unit_id=PHILLIPS_SORPTIVITY_UNIT_ID,
+    allowed_unit_ids=(PHILLIPS_SORPTIVITY_UNIT_ID, ),
+    aggregation=None,
+    default_interpolation="linear",
+    dependencies=({"record": True}, ),
+)
+
+# ------------------------------------------------------------------
 # MASTER REGISTRY
 # ------------------------------------------------------------------
 
@@ -310,4 +348,7 @@ VARIABLE_REGISTRY = (
     CROP_HEIGHT,
     CROP_DENSITY,
     SURFACE_COVER,
+    SATURATED_HYDRAULIC_CONDUCTIVITY,
+    EFFECTIVE_CAPILARY_DRIVE,
+    PHILLIPS_SORPTIVITY
 )

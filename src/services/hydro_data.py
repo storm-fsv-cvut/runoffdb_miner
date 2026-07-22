@@ -12,7 +12,6 @@ from src.services.record_resolution import *
 from src.diagnostics.absence_reasons import DataAbsenceReason
 
 from src.entities.run import Run
-from src.setup.variables_definition import describe_derivation
 from src.setup.variables_registry import *
 
 
@@ -451,7 +450,6 @@ def get_rainfall_intensity_value(
 
             return None, root_trace
 
-        print(f"values: {values}")
         root_trace.details = "rainfall regime classified as 'constant'"
         # root_trace.metadata = {
         #     "record_id": record.id,

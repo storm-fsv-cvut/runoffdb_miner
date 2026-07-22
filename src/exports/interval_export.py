@@ -2,8 +2,8 @@ from datetime import datetime
 import os
 from pandas import isna
 
-from src.schemas import resolve_header_of_column
-from src.schemas import RUN_PROPERTIES
+from src.schemas.column_schemas import resolve_header_of_column
+from src.schemas.run_properties_columns import RUN_PROPERTIES
 from src.schemas.hydro_sediment_columns import HYDRO_SEDIMENT_INTERVALS
 from src.setup.variables_definition import VariableGroup
 
@@ -132,7 +132,6 @@ def generate_interval_values_csv(
 
                 hydro_data = hydro_data.infer_objects(copy=False)
 
-                print(hydro_data)
                 if hydro_trace:
                     run_trace.traces.append(hydro_trace)
 

@@ -2,17 +2,20 @@
 """
 @author: Jan Devátý
 """
-
+import os
 # from src.exports.testing import *
 from datetime import datetime
 from src.entities.runoffdb import RunoffDB
-from src.processing.engine import ProcessingEngine
+
 from src.processing.request import ProcessingRequest
 from src.filters.run_filter import RunFilter
 from src.processing .policy import DataPolicy
-from src.exports.interval_export import generate_interval_values_csv
+
+from src.exports.templates import *
 from src.utilities.utilities import czech_date
 from src.project_structure import project_tree
+
+
 
 
 if __name__ == '__main__':
@@ -40,24 +43,29 @@ if __name__ == '__main__':
                                    date_to=datetime.fromisoformat("2018-05-25"),
                                    localities=[1])
 
+    request = ProcessingRequest(
+        selection=filter_all,
+        variables=[],
+        policy=DataPolicy()
+    )
+
     with RunoffDB() as runoffdb:
-        request = ProcessingRequest(
-            selection=filter_2018_Risuty,
-            variables=[],
-            policy=DataPolicy()
-        )
+        # interval_export(runoffdb=runoffdb,
+        #                 request=request,
+        #                 output_path="d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
+        #                 lang=lang,
+        #                 no_data_value="",
+        #                 output_trace_path=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_report.json")
 
-        engine = ProcessingEngine(runoffdb)
-        result = engine.execute(request)
-
-        generate_interval_values_csv(processing_result=result,
-                                     runoffdb=runoffdb,
-                                     output_path=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
+        dir_name = f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}"
+        trace_path = os.path.join(dir_name, f"runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_trace.json")
+        interval_export_by_simulator(runoffdb=runoffdb,
+                                     request=request,
+                                     output_dir=dir_name,
                                      lang=lang,
                                      no_data_value="",
-                                     output_trace_path=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_report.json")
+                                     output_trace_path=trace_path)
 
-        pass
 
     # project_tree("D:/Dokumenty/RUNOFFDB/runoffdb_miner", files_only=True)
     #
