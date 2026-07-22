@@ -1,0 +1,9 @@
+# pycharm
+.idea/
+
+# python cache
+__pycache__/
+*.py[cod]
+
+# archives
+*.zip
