@@ -158,8 +158,7 @@ RUN_PROPERTIES: list[RunColumn] = [
             registry=registry,
             lang=lang,
         ),
-        getter=lambda r, ctx:
-            get_crop_height_value(run=r, multi_value=False),
+        getter=lambda r, ctx: get_crop_height_value(run=r, multi_value=False),
     ),
 
     RunColumn(
@@ -265,6 +264,7 @@ def get_cached_soil_texture(
             x_label="cumulative_mass_content",
             y_label="particle_size",
             limits=WRB_FRACTION_LIMITS,
+            return_cumulative=False
         )
 
     return run_ctx["soil_texture"]

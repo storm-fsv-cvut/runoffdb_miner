@@ -43,31 +43,33 @@ if __name__ == '__main__':
                                    date_to=datetime.fromisoformat("2018-05-25"),
                                    localities=[1])
 
+    policy = DataPolicy()
+
     request = ProcessingRequest(
-        selection=filter_all,
+        selection=filter_2018_Risuty,
         variables=[],
-        policy=DataPolicy()
+        policy=policy
     )
 
     with RunoffDB() as runoffdb:
-        # interval_export(runoffdb=runoffdb,
-        #                 request=request,
-        #                 output_path="d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
-        #                 lang=lang,
-        #                 no_data_value="",
-        #                 output_trace_path=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_report.json")
+        interval_export(runoffdb=runoffdb,
+                        request=request,
+                        output_path=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}.csv",
+                        lang=lang,
+                        no_data_value="",
+                        output_trace_path=f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_report.json")
 
-        dir_name = f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}"
-        trace_path = os.path.join(dir_name, f"runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_trace.json")
-        interval_export_by_simulator(runoffdb=runoffdb,
-                                     request=request,
-                                     output_dir=dir_name,
-                                     lang=lang,
-                                     no_data_value="",
-                                     output_trace_path=trace_path)
+        # dir_name = f"d:/Downloads/runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}"
+        # trace_path = os.path.join(dir_name, f"runoff_sediment_intervals_{datetime.now().strftime('%Y%m%d')}_{lang}_trace.json")
+        # interval_export_by_simulator(runoffdb=runoffdb,
+        #                              request=request,
+        #                              output_dir=dir_name,
+        #                              lang=lang,
+        #                              no_data_value="",
+        #                              output_trace_path=trace_path)
+        pass
 
-
-    # project_tree("D:/Dokumenty/RUNOFFDB/runoffdb_miner", files_only=True)
+    # project_tree("D:/Dokumenty/RUNOFFDB/runoffdb_miner", files_only=False)
     #
     # with Miner(filter_2018) as miner:
     #     # test_this(miner)

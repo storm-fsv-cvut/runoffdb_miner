@@ -248,8 +248,9 @@ def get_best_soil_texture_data(
     # --------------------------------------------------
     # interpolation
     # --------------------------------------------------
-    if limits:
 
+    if limits:
+        print(df)
         df, interpolation_trace = interpolate_texture(
             original_texture=df,
             new_limits=limits,
@@ -257,7 +258,7 @@ def get_best_soil_texture_data(
             return_int=return_int,
             return_cumulative=return_cumulative,
         )
-
+        print(df)
         data_trace.traces.append(interpolation_trace)
 
     return df, root_trace
@@ -312,6 +313,7 @@ def interpolate_texture(
     original_texture,
     new_limits,
     cum_mass_col_name,
+    particle_size_col="particle_size",
     return_cumulative=True,
     return_int=True,
     smallest_content=1,
@@ -331,90 +333,219 @@ def interpolate_texture(
     if not isinstance(original_texture, pd.DataFrame):
 
         root_trace.success = False
-        root_trace.details = "texture interpolation failed",
+        root_trace.details = "texture interpolation failed"
+
         root_trace.issues.append(
             DataIssue(
                 reason=DataAbsenceReason.INVALID_VALUES,
                 details="input texture is not a pandas DataFrame",
-                severity=IssueSeverity.ERROR
+                severity=IssueSeverity.ERROR,
             )
         )
 
         return None, root_trace
 
     # --------------------------------------------------
+    # prepare dataframe
+    # --------------------------------------------------
+
+    df = original_texture.copy()
+
+    if df.index.name != particle_size_col:
+
+        if particle_size_col not in df.columns:
+
+            root_trace.success = False
+            root_trace.details = "texture interpolation failed"
+
+            root_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INVALID_VALUES,
+                    details=f"particle size column '{particle_size_col}' not found",
+                    severity=IssueSeverity.ERROR,
+                )
+            )
+
+            return None, root_trace
+
+        df.set_index(particle_size_col, inplace=True)
+
+    df.sort_index(inplace=True)
+
+    # --------------------------------------------------
+    # report and remove missing values
+    # --------------------------------------------------
+
+    missing = df[df[cum_mass_col_name].isna()]
+
+    for particle_size in missing.index:
+
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.NO_DATA_IN_RECORD,
+                details=f"missing cumulative mass content for particle size {particle_size}",
+                severity=IssueSeverity.WARNING,
+            )
+        )
+
+    df = df.dropna(subset=[cum_mass_col_name])
+
+    if len(df) < 2:
+
+        root_trace.success = False
+        root_trace.details = "texture interpolation failed"
+
+        root_trace.issues.append(
+            DataIssue(
+                reason=DataAbsenceReason.MISSING_DATA,
+                details="at least two valid texture points are required",
+                severity=IssueSeverity.ERROR,
+            )
+        )
+
+        return None, root_trace
+
+    # --------------------------------------------------
+    # validate cumulative curve
+    # --------------------------------------------------
+
+    previous = None
+
+    for particle_size, value in df[cum_mass_col_name].items():
+
+        if not (0 <= value <= 100):
+
+            root_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INVALID_VALUES,
+                    details=(
+                        f"cumulative mass content {value} at particle size "
+                        f"{particle_size} is outside the expected range <0,100>"
+                    ),
+                    severity=IssueSeverity.WARNING,
+                )
+            )
+
+        if previous is not None and value < previous:
+
+            root_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INVALID_VALUES,
+                    details=(
+                        f"cumulative mass content decreases from "
+                        f"{previous} to {value}"
+                    ),
+                    severity=IssueSeverity.WARNING,
+                )
+            )
+
+        previous = value
+
+    # --------------------------------------------------
     # interpolation
     # --------------------------------------------------
 
-    particle_size_col = original_texture.index.name
-
-    original_limits = original_texture.index.to_list()
-    original_contents = original_texture[cum_mass_col_name].to_list()
-
-    original_limits.insert(0, 0)
-    original_contents.insert(0, smallest_content)
+    original_limits = [0.0] + df.index.to_list()
+    original_contents = [smallest_content] + df[cum_mass_col_name].to_list()
 
     new_limits = sorted(new_limits)
+
+    min_limit = original_limits[1]
+    max_limit = original_limits[-1]
 
     cumul_contents = []
 
     for nl in new_limits:
 
-        prev_ol = None
-        prev_content = None
+        if nl < min_limit or nl > max_limit:
 
-        for ol, content in zip(
-            original_limits,
-            original_contents,
+            cumul_contents.append(pd.NA)
+
+            root_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.NO_DATA_IN_RANGE,
+                    details=(
+                        f"cannot interpolate particle size {nl}; "
+                        f"available range is {min_limit}–{max_limit}"
+                    ),
+                    severity=IssueSeverity.WARNING,
+                )
+            )
+
+            continue
+
+        interpolated = pd.NA
+
+        for prev_limit, limit, prev_content, content in zip(
+            original_limits[:-1],
+            original_limits[1:],
+            original_contents[:-1],
+            original_contents[1:],
         ):
 
-            if prev_ol is not None:
+            if prev_limit < nl <= limit:
 
-                if prev_ol < nl <= ol:
+                interpolated = (
+                    prev_content
+                    + (content - prev_content)
+                    * (nl - prev_limit)
+                    / (limit - prev_limit)
+                )
 
-                    new_value = (
-                        prev_content + ((content - prev_content) / (ol - prev_ol)) * (nl - prev_ol)
-                    )
+                break
 
-                    cumul_contents.append(new_value)
-                    break
+        cumul_contents.append(interpolated)
 
-            prev_ol = ol
-            prev_content = content
+    # --------------------------------------------------
+    # cumulative -> interval
+    # --------------------------------------------------
 
-    if return_int:
-        cumul_contents = [round(v) for v in cumul_contents ]
+    if return_cumulative:
 
-    if not return_cumulative:
-
-        output_contents = [cumul_contents[0]]
-
-        for i in range(1, len(cumul_contents)):
-            output_contents.append(cumul_contents[i] - cumul_contents[i - 1])
+        output_contents = cumul_contents
 
     else:
-        output_contents = cumul_contents
+
+        output_contents = []
+
+        previous = 0
+
+        for value in cumul_contents:
+
+            if pd.isna(value):
+
+                output_contents.append(pd.NA)
+
+            else:
+
+                output_contents.append(value - previous)
+                previous = value
+
+    # --------------------------------------------------
+    # rounding
+    # --------------------------------------------------
+
+    if return_int:
+
+        output_contents = [
+            round(v) if not pd.isna(v) else pd.NA
+            for v in output_contents
+        ]
+
+    # --------------------------------------------------
+    # output
+    # --------------------------------------------------
 
     output_df = pd.DataFrame(
         {
             particle_size_col: new_limits,
             cum_mass_col_name: output_contents,
         }
-    )
-
-    output_df.set_index(
-        particle_size_col,
-        inplace=True,
-    )
+    ).set_index(particle_size_col)
 
     root_trace.details = (
-        f"interpolated into {len(new_limits)} particle size limits [{', '.join([str(l) for l in new_limits])}]"
+        f"interpolated into {len(new_limits)} particle size limits "
+        f"[{', '.join(map(str, new_limits))}]"
     )
-
-    # trace.metadata = {
-    #     "return_cumulative": return_cumulative,
-    #     "return_int": return_int,
-    #     "smallest_content": smallest_content,
-    # }
 
     return output_df, root_trace

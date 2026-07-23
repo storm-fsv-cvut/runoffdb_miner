@@ -2,7 +2,7 @@
 from ..processing.resolution.field import resolve_translated_field
 from ..setup.entity_ids import *
 from ..utilities.utilities import *
-from ..diagnostics.trace import DataTrace
+from ..diagnostics.trace import DataTrace, create_trace
 from ..diagnostics.issue import DataIssue
 from ..diagnostics.severity import IssueSeverity
 from ..diagnostics.absence_reasons import *
@@ -74,13 +74,10 @@ class Plot:
 
     def get_protection_measures_names(self, lang: str):
 
-        trace = DataTrace(
+        trace = create_trace(
             source="Plot.get_protection_measures_names",
             variable="protection_measure_names",
-            success=True,
-            owner_id=self.id,
-            owner_class=type(self).__name__,
-            traces=[],
+            owner=self,
         )
 
         if not self.protection_measures:
@@ -112,13 +109,10 @@ class Plot:
         Returns number of days since seeding + provenance trace.
         """
 
-        trace = DataTrace(
+        trace = create_trace(
             source="Plot.days_since_seeding",
             variable="days_since_seeding",
-            success=True,
-            owner_id=self.id,
-            owner_class=type(self).__name__,
-            traces=[],
+            owner=self,
         )
 
         # -----------------------------------------
@@ -132,14 +126,14 @@ class Plot:
         # agrotechnology path
         # -----------------------------------------
         if self.agrotechnology is not None:
-            days = self.agrotechnology.days_since_seeding(
+            value, sub_trace = self.agrotechnology.days_since_seeding(
                 datetime,
                 main_crop_only=main_crop_only,
             )
 
             trace.details = "derived from agrotechnology"
-
-            return days, trace
+            trace.traces.append(sub_trace)
+            return value, trace
 
         # -----------------------------------------
         # missing dependency
@@ -149,20 +143,17 @@ class Plot:
             details=f"plot #{self.id} has no agrotechnology assigned",
         )
 
-        trace.success=False
-        trace.details="unable to compute days since seeding",
+        trace.success = False
+        trace.details ="unable to compute days since seeding",
         trace.issues.append(issue)
 
         return None, trace
 
     def days_since_last_operation(self) -> tuple[Optional[int], DataTrace]:
-        trace = DataTrace(
+        trace = create_trace(
             source="Plot.days_since_last_operation",
             variable="days_since_last_operation",
-            success=True,
-            owner_id=self.id,
-            owner_class=type(self).__name__,
-            traces=[],
+            owner=self,
         )
 
         # for the cultivated fallow always return 0 since it is assumed prepared right before the simulation
@@ -172,14 +163,14 @@ class Plot:
 
         else:
             if self.agrotechnology is not None:
+                value, sub_trace = self.agrotechnology.days_since_last_operation(date)
                 trace.details = "derived from agrotechnology"
-
-                return self.agrotechnology.days_since_last_operation(date), trace
+                trace.traces.append(sub_trace)
+                return value, trace
 
             else:
                 issue = DataIssue(
                     reason=DataAbsenceReason.MISSING_PROPERTY,
-                    source="Plot.days_since_last_operation",
                     details=f"plot #{self.id} has no agrotechnology assigned",
                 )
 
@@ -253,6 +244,14 @@ class Crop:
             mandatory=True,
         )
 
+    def get_description(self, lang="en"):
+        return resolve_translated_field(
+            owner=self,
+            field_name="description",
+            values=self.description,
+            lang=lang,
+            source=f"{type(self).__name__}.get_description",
+        )
     def get_metadata(self, lang="en"):
         meta = {"crop ID": self.id,
                 "name": self.name[lang]
@@ -284,47 +283,45 @@ class Agrotechnology:
         self.operation_sequence = self.runoffdb.get_operation_sequence(self.id)
 
     def get_maximum_disturbance_level(self):
-        trace = DataTrace(
+        trace = create_trace(
             source="Agrotechnology.get_maximum_disturbance_level",
             variable="maximum_soil_disturbance_level",
-            success=True,
-            details="calculating maximum soil disturbance level from tillage operations sequence",
-            owner_id=self.id,
-            owner_class=type(self).__name__,
-            traces=[],
+            details="getting maximum soil disturbance level from tillage operations sequence",
+            owner=self,
         )
         if self.operation_sequence is None or self.operation_sequence == {}:
             issue = DataIssue(
                 reason=DataAbsenceReason.MISSING_PROPERTY,
-                source="Agrotechnology.get_maximum_disturbance_level",
                 details=f"agrotechnology #{self.id} has empty operation sequence",
                 )
             trace.success = False
             trace.issues.append(issue)
             return None, trace
 
+        trace.details = "maximum soil disturbance level derived from tillage operations sequence"
+        trace.success = True
         return max([op.operation_intensity_id for op in self.operation_sequence.values()]), trace
 
     def get_maximum_disturbance_depth(self):
-        trace = DataTrace(
+        trace = create_trace(
             source="Agrotechnology.get_maximum_disturbance_depth",
             variable="maximum_soil_disturbance_depth",
             success=True,
-            details="calculating maximum soil disturbance depth from tillage operations sequence",
-            owner_id=self.id,
-            owner_class=type(self).__name__,
+            details="getting maximum soil disturbance depth from tillage operations sequence",
+            owner=self,
             traces=[],
         )
         if self.operation_sequence is None or self.operation_sequence == {}:
             issue = DataIssue(
                 reason=DataAbsenceReason.MISSING_PROPERTY,
-                source="Agrotechnology.get_maximum_disturbance_depth",
                 details=f"agrotechnology #{self.id} has empty operation sequence",
             )
             trace.success = False
             trace.issues.append(issue)
             return None, trace
 
+        trace.success = True
+        trace.details = "maximum soil disturbance depth derived from tillage operations sequence"
         return max([op.operation_depth_m for op in self.operation_sequence.values()]), trace
 
     def is_hay_cut(self):
@@ -340,6 +337,10 @@ class Agrotechnology:
         return False
 
     def days_since_seeding(self, input_datetime, main_crop_only=False):
+        trace = create_trace(source="Agrotechnology.days_since_seeding",
+                             owner=self,
+                             details="",
+                             )
         # check if the input is a datetime or a date
         if isinstance(input_datetime, datetime):
             # extract just the date if it's a datetime
@@ -354,14 +355,24 @@ class Agrotechnology:
             if operation_date <= the_date:
                 # Check if the operation type is "seeding"
                 if main_crop_only and self.operation_sequence[operation_date].operation_type_id == MAIN_CROP_SEEDING_OPERATION_TYPE_ID:
+                    trace.details = "days since seeding for the main crop derived from operation sequence"
                     # Return the number of days since the last seeding
-                    return (the_date - operation_date).days
-                elif self.operation_sequence[operation_date].operation_type_id == MAIN_CROP_SEEDING_OPERATION_TYPE_ID or self.operation_sequence[operation_date].operation_type_id == AUX_CROP_SEEDING_OPERATION_TYPE_ID:
-                    return (the_date - operation_date).days
+                    return (the_date - operation_date).days, trace
+                elif self.operation_sequence[operation_date].operation_type_id == MAIN_CROP_SEEDING_OPERATION_TYPE_ID:
+                    trace.details = "days since seeding (of the main crop) derived from operation sequence"
+                    return (the_date - operation_date).days, trace
+                elif self.operation_sequence[operation_date].operation_type_id == AUX_CROP_SEEDING_OPERATION_TYPE_ID:
+                    trace.details = "days since seeding (of the auxiliary crop) derived from operation sequence"
+                    return (the_date - operation_date).days, trace
         # if no seeding operation was found, return None
-        return None
+        trace.details = "no seeding operation found in agrotechnology"
+        return None, trace
 
     def days_since_last_operation(self, input_datetime):
+        trace = create_trace(source="Agrotechnology.days_since_last_operation",
+                             owner=self,
+                             details="",
+                             )
         # check if the input is a datetime or a date
         if isinstance(input_datetime, datetime):
             # extract just the date if it's a datetime
@@ -370,13 +381,23 @@ class Agrotechnology:
             the_date = input_datetime
         else:
             raise ValueError("The input must be a date or datetime object.")
+
+        if self.operation_sequence is None or self.operation_sequence == {}:
+            issue = DataIssue(
+                reason=DataAbsenceReason.MISSING_PROPERTY,
+                details=f"agrotechnology #{self.id} has empty operation sequence",
+            )
+            trace.success = False
+            trace.issues.append(issue)
+            return None, trace
+
         # Sort the operation_sequence by date in reverse order (most recent first)
         for operation_date in sorted(self.operation_sequence.keys(), reverse=True):
             if operation_date <= the_date:
+                trace.details = "days since last operation derived from tillage operations sequence"
                 # Return the number of days since the last seeding
                 return (the_date - operation_date).days
-        # If no "seeding" operation was found, return None or a suitable value (e.g. -1)
-        return None
+
 
     def get_metadata(self, lang="en"):
         meta = {"name": self.name[lang]}
