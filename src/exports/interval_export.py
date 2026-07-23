@@ -74,10 +74,11 @@ def generate_interval_values_csv(
         for c in HYDRO_SEDIMENT_INTERVALS
     ]
 
-    # exports level execution context
+    # export level execution context
     general_ctx = {
         "lang": lang,
         "no_data_value": no_data_value,
+        "policy": policy,
     }
 
     try:
@@ -128,7 +129,7 @@ def generate_interval_values_csv(
                 # hydro + sediment data
                 # -------------------
 
-                hydro_data, hydro_trace = get_hydro_sediment_timeline(run=run)
+                hydro_data, hydro_trace = get_hydro_sediment_timeline(run=run, policy=policy)
 
                 hydro_data = hydro_data.infer_objects(copy=False)
 

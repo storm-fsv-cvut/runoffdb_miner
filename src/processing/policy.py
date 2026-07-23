@@ -41,3 +41,11 @@ class DataPolicy:
 
     variable_overrides: dict[str, VariableRequestOptions] = field(default_factory=dict)
 
+    def resolution_for(self, variable):
+
+        override = self.variable_overrides.get(variable)
+
+        if override and override.resolution_mode:
+            return override.resolution_mode
+
+        return self.resolution_mode

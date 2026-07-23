@@ -4,7 +4,7 @@ from typing import Dict, List
 from dataclasses import dataclass
 
 from src.services.interpolation import *
-
+from src.processing.policy import DataPolicy, ResolutionMode
 from src.services.interpolation import interpolate_dataframe
 from src.services.integration import integrate_series
 from src.services.record_resolution import *
@@ -30,6 +30,7 @@ class DerivedDep:
 def get_hydro_sediment_timeline(
     *,
     run: "Run",
+    policy: DataPolicy,
     variables: list[str] | None = None,
     interpolation_map: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, DataTrace]:
@@ -71,7 +72,7 @@ def get_hydro_sediment_timeline(
     )
 
     resolved_series: dict[str, pd.Series] = {}
-    derived_cache: dict[str, bool] = {}
+    resolution_cache: dict[str, bool] = {}
 
     if variables is None:
         variables = list(registry.keys())
@@ -80,7 +81,49 @@ def get_hydro_sediment_timeline(
     # record variables
     # =====================================================
 
-    def resolve_record_variable(key: str) -> bool:
+    def resolve_variable(key: str) -> bool:
+
+        if key in resolved_series:
+            return True
+
+        if key in resolution_cache:
+            return resolution_cache[key]
+
+        mode = policy.resolution_for(key)
+        trace = create_trace(
+            source="resolve_variable",
+            owner=run,
+            variable=key,
+            details=f"mode={mode.name}",
+        )
+
+        if mode == ResolutionMode.DIRECT_ONLY:
+            success, subtrace = resolve_variable_record(key)
+
+
+        elif mode == ResolutionMode.DERIVED_ONLY:
+            success = resolve_derived(key)
+
+
+        elif mode == ResolutionMode.PREFER_DIRECT:
+            success = (
+                    resolve_variable_record(key)
+                    or
+                    resolve_derived(key)
+            )
+
+        elif mode == ResolutionMode.PREFER_DERIVED:
+            success = (
+                    resolve_derived(key)
+                    or
+                    resolve_variable_record(key)
+            )
+
+        resolution_cache[key] = success
+
+        return success
+
+    def resolve_variable_record(key: str) -> bool:
 
         if key in resolved_series:
             return True
@@ -144,19 +187,19 @@ def get_hydro_sediment_timeline(
     # derived variables
     # =====================================================
 
-    def derive_variable(key: str) -> bool:
+    def resolve_derived(key: str) -> bool:
 
         if key in merged.columns or key in resolved_series.keys():
             return True
 
         if key not in registry:
-            derived_cache[key] = False
+            resolution_cache[key] = False
             return False
 
         var_def = registry[key]
 
         if not var_def.derivation_func:
-            derived_cache[key] = False
+            resolution_cache[key] = False
             return False
 
         dependency_keys = []
@@ -172,8 +215,8 @@ def get_hydro_sediment_timeline(
             all_dep_string = f"{', '.join(dependency_keys)}"
 
         for dep_key in dependency_keys:
-            if not derive_variable(dep_key):
-                derived_cache[key] = False
+            if not resolve_variable(dep_key):
+                resolution_cache[key] = False
                 unavailable_dependencies.append(dep_key)
 
         if unavailable_dependencies:
@@ -212,7 +255,7 @@ def get_hydro_sediment_timeline(
         try:
             var_def.derivation_func(merged)
             derivation_trace.traces.append(trace)
-            derived_cache[key] = True
+            resolution_cache[key] = True
 
             return True
 
@@ -231,7 +274,7 @@ def get_hydro_sediment_timeline(
 
             derivation_trace.traces.append(trace)
 
-            derived_cache[key] = False
+            resolution_cache[key] = False
 
             return False
 
@@ -243,7 +286,7 @@ def get_hydro_sediment_timeline(
         if key not in registry:
             continue
 
-        resolve_record_variable(key)
+        resolve_variable_record(key)
 
     if not resolved_series:
 
@@ -292,16 +335,16 @@ def get_hydro_sediment_timeline(
 
         return pd.DataFrame(), root_trace
 
-    # =====================================================
-    # derive remaining variables
-    # =====================================================
-
-    for key in variables:
-
-        if key not in registry:
-            continue
-
-        derive_variable(key)
+    # # =====================================================
+    # # derive remaining variables
+    # # =====================================================
+    #
+    # for key in variables:
+    #
+    #     if key not in registry:
+    #         continue
+    #
+    #     derive_variable(key)
 
     # =====================================================
     # assemble final provenance tree
