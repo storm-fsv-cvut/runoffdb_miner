@@ -71,222 +71,18 @@ def get_hydro_sediment_timeline(
         owner=run,
     )
 
-    resolved_series: dict[str, pd.Series] = {}
-    resolution_cache: dict[str, bool] = {}
-
     if variables is None:
         variables = list(registry.keys())
 
-    # =====================================================
-    # record variables
-    # =====================================================
 
-    def resolve_variable(key: str) -> bool:
+    resolved_series = resolve_record_variables(
+        run=run,
+        registry=registry,
+        variables=variables,
+        default_units=default_units,
+        resolve_trace=resolve_trace,
+    )
 
-        if key in resolved_series:
-            return True
-
-        if key in resolution_cache:
-            return resolution_cache[key]
-
-        mode = policy.resolution_for(key)
-        trace = create_trace(
-            source="resolve_variable",
-            owner=run,
-            variable=key,
-            details=f"mode={mode.name}",
-        )
-
-        if mode == ResolutionMode.DIRECT_ONLY:
-            success, subtrace = resolve_variable_record(key)
-
-
-        elif mode == ResolutionMode.DERIVED_ONLY:
-            success = resolve_derived(key)
-
-
-        elif mode == ResolutionMode.PREFER_DIRECT:
-            success = (
-                    resolve_variable_record(key)
-                    or
-                    resolve_derived(key)
-            )
-
-        elif mode == ResolutionMode.PREFER_DERIVED:
-            success = (
-                    resolve_derived(key)
-                    or
-                    resolve_variable_record(key)
-            )
-
-        resolution_cache[key] = success
-
-        return success
-
-    def resolve_variable_record(key: str) -> bool:
-
-        if key in resolved_series:
-            return True
-
-        var_def = registry[key]
-
-        if not any("record" in d for d in var_def.dependencies):
-            return False
-
-        record, record_trace = get_best_record_of_unit(
-            owner=run,
-            unit_id=var_def.allowed_unit_ids,
-            phenomenon_id=var_def.phenomenon_id,
-        )
-
-        if not record:
-            resolve_trace.traces.append(record_trace)
-            return False
-
-        if not record.is_timeline:
-
-            record_trace.success = False
-            record_trace.issues.append(
-                DataIssue(
-                    reason=DataAbsenceReason.INVALID_VALUES,
-                    details=f"record for '{key}' is not timeline data",
-                    severity=IssueSeverity.WARNING,
-                )
-            )
-
-            resolve_trace.traces.append(record_trace)
-            return False
-
-        df, data_trace = get_record_data(
-            record=record,
-            value_label=key,
-            target_unit_id=default_units.get(key),
-        )
-
-        # append the data trace to the last (and should be the only one) trace of the record traces
-        if record_trace.traces:
-            record_trace.traces[-1].traces.append(data_trace)
-        else:
-            record_trace.traces.append(data_trace)
-
-        if df is None or df.empty:
-            record_trace.success = False
-            resolve_trace.traces.append(record_trace)
-            return False
-
-        series = df[key] if key in df.columns else df.iloc[:, 0]
-        series.name = key
-
-        resolved_series[key] = series
-
-        resolve_trace.traces.append(record_trace)
-
-        return True
-
-    # =====================================================
-    # derived variables
-    # =====================================================
-
-    def resolve_derived(key: str) -> bool:
-
-        if key in merged.columns or key in resolved_series.keys():
-            return True
-
-        if key not in registry:
-            resolution_cache[key] = False
-            return False
-
-        var_def = registry[key]
-
-        if not var_def.derivation_func:
-            resolution_cache[key] = False
-            return False
-
-        dependency_keys = []
-
-        for dep in var_def.dependencies:
-            dependency_keys.extend(dep.get("derived_from", []))
-
-        unavailable_dependencies = []
-
-        if len(dependency_keys) == 1:
-            all_dep_string = f"'{dependency_keys[0]}'"
-        else:
-            all_dep_string = f"{', '.join(dependency_keys)}"
-
-        for dep_key in dependency_keys:
-            if not resolve_variable(dep_key):
-                resolution_cache[key] = False
-                unavailable_dependencies.append(dep_key)
-
-        if unavailable_dependencies:
-            trace = create_trace(
-                source="derivation",
-                owner=run,
-                variable=key,
-                success=False,
-                details=f"needed {'dependencies' if len(dependency_keys)>1 else 'dependency'}: {all_dep_string}"
-            )
-
-            if len(unavailable_dependencies) == 1:
-                dep_string = f"dependency '{unavailable_dependencies[0]}'"
-            else:
-                dep_string = f"dependencies {', '.join(unavailable_dependencies)}"
-
-            trace.issues.append(
-                DataIssue(
-                    reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
-                    details=f"{dep_string} missing for derived variable '{key}'",
-                    severity=IssueSeverity.WARNING,
-                )
-            )
-
-            derivation_trace.traces.append(trace)
-
-            return False
-
-        trace = create_trace(
-            source="derivation",
-            owner=run,
-            variable=key,
-            details=var_def.derivation_description
-        )
-
-        try:
-            var_def.derivation_func(merged)
-            derivation_trace.traces.append(trace)
-            resolution_cache[key] = True
-
-            return True
-
-        except Exception as e:
-
-            trace.success = False
-            trace.details = str(e)
-
-            trace.issues.append(
-                DataIssue(
-                    reason=DataAbsenceReason.UNKNOWN,
-                    details=str(e),
-                    severity=IssueSeverity.ERROR,
-                )
-            )
-
-            derivation_trace.traces.append(trace)
-
-            resolution_cache[key] = False
-
-            return False
-
-    # =====================================================
-    # resolve timeline variables
-    # =====================================================
-
-    for key in variables:
-        if key not in registry:
-            continue
-
-        resolve_variable_record(key)
 
     if not resolved_series:
 
@@ -304,51 +100,39 @@ def get_hydro_sediment_timeline(
 
         return pd.DataFrame(), root_trace
 
-    # =====================================================
-    # assemble common timeline
-    # =====================================================
 
-    merged = pd.concat(
-        resolved_series.values(),
-        axis=1,
+    merged = assemble_timeline(
+        resolved_series=resolved_series,
+        interpolations=interpolations,
+        assembly_trace=assembly_trace,
     )
 
-    merged.index = pd.to_timedelta(merged.index)
-    merged.sort_index(inplace=True)
-
-    merged, interpolation_trace = interpolate_dataframe(
-        merged,
-        interpolations,
-    )
-
-    assembly_trace.traces.append(interpolation_trace)
 
     if merged is None:
 
         assembly_trace.success = False
 
         root_trace.success = False
-        root_trace.traces.extend([
-            resolve_trace,
-            assembly_trace,
-        ])
+
+        root_trace.traces.extend(
+            [
+                resolve_trace,
+                assembly_trace,
+            ]
+        )
 
         return pd.DataFrame(), root_trace
 
-    # # =====================================================
-    # # derive remaining variables
-    # # =====================================================
-    #
-    # for key in variables:
-    #
-    #     if key not in registry:
-    #         continue
-    #
-    #     derive_variable(key)
 
-    # =====================================================
-    # assemble final provenance tree
-    # =====================================================
+    # keep derivation phase separate for now
+    derive_variables(
+        run=run,
+        registry=registry,
+        variables=variables,
+        merged=merged,
+        derivation_trace=derivation_trace,
+    )
+
 
     root_trace.traces.append(resolve_trace)
     root_trace.traces.append(assembly_trace)
@@ -356,7 +140,262 @@ def get_hydro_sediment_timeline(
     if derivation_trace.traces or derivation_trace.issues:
         root_trace.traces.append(derivation_trace)
 
+
     return merged, root_trace
+
+def resolve_record_variables(
+    *,
+    run,
+    registry,
+    variables,
+    default_units,
+    resolve_trace,
+) -> dict[str, pd.Series]:
+
+    resolved_series = {}
+
+    for key in variables:
+
+        if key not in registry:
+            continue
+
+        var_def = registry[key]
+
+
+        if not any(
+            "record" in d
+            for d in var_def.dependencies
+        ):
+            continue
+
+
+        record, record_trace = get_best_record_of_unit(
+            owner=run,
+            unit_id=var_def.allowed_unit_ids,
+            phenomenon_id=var_def.phenomenon_id,
+        )
+
+
+        if not record:
+
+            resolve_trace.traces.append(
+                record_trace
+            )
+
+            continue
+
+
+        if not record.is_timeline:
+
+            record_trace.success = False
+
+            record_trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.INVALID_VALUES,
+                    details=(
+                        f"record for '{key}' "
+                        "is not timeline data"
+                    ),
+                    severity=IssueSeverity.WARNING,
+                )
+            )
+
+            resolve_trace.traces.append(
+                record_trace
+            )
+
+            continue
+
+
+        df, data_trace = get_record_data(
+            record=record,
+            value_label=key,
+            target_unit_id=default_units.get(key),
+        )
+
+
+        if record_trace.traces:
+            record_trace.traces[-1].traces.append(
+                data_trace
+            )
+        else:
+            record_trace.traces.append(
+                data_trace
+            )
+
+
+        if df is None or df.empty:
+
+            record_trace.success = False
+
+            resolve_trace.traces.append(
+                record_trace
+            )
+
+            continue
+
+
+        series = (
+            df[key]
+            if key in df.columns
+            else df.iloc[:, 0]
+        )
+
+        series.name = key
+
+        resolved_series[key] = series
+
+        resolve_trace.traces.append(
+            record_trace
+        )
+
+
+    return resolved_series
+
+def assemble_timeline(
+    *,
+    resolved_series,
+    interpolations,
+    assembly_trace,
+):
+
+    merged = pd.concat(
+        resolved_series.values(),
+        axis=1,
+    )
+
+
+    merged.index = pd.to_timedelta(
+        merged.index
+    )
+
+    merged.sort_index(
+        inplace=True
+    )
+
+
+    merged, interpolation_trace = interpolate_dataframe(
+        merged,
+        interpolations,
+    )
+
+
+    assembly_trace.traces.append(
+        interpolation_trace
+    )
+
+
+    return merged
+
+def derive_variables(
+    *,
+    run,
+    registry,
+    variables,
+    merged,
+    derivation_trace,
+):
+
+    for key in variables:
+
+        if key not in registry:
+            continue
+
+
+        var_def = registry[key]
+
+
+        if not var_def.derivation_func:
+            continue
+
+
+        dependency_keys = []
+
+        for dep in var_def.dependencies:
+            dependency_keys.extend(
+                dep.get("derived_from", [])
+            )
+
+
+        if not dependency_keys:
+            continue
+
+
+        missing = [
+            dep
+            for dep in dependency_keys
+            if dep not in merged.columns
+        ]
+
+
+        if missing:
+
+            trace = create_trace(
+                source="derivation",
+                owner=run,
+                variable=key,
+                success=False,
+                details=(
+                    f"missing dependencies: "
+                    f"{', '.join(missing)}"
+                )
+            )
+
+
+            trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.MISSING_REQUIRED_INPUT,
+                    details=(
+                        f"cannot derive '{key}'"
+                    ),
+                    severity=IssueSeverity.WARNING,
+                )
+            )
+
+
+            derivation_trace.traces.append(
+                trace
+            )
+
+            continue
+
+
+        trace = create_trace(
+            source="derivation",
+            owner=run,
+            variable=key,
+            details=var_def.derivation_description,
+        )
+
+
+        try:
+
+            var_def.derivation_func(
+                merged
+            )
+
+            derivation_trace.traces.append(
+                trace
+            )
+
+
+        except Exception as e:
+
+            trace.success = False
+            trace.details = str(e)
+
+            trace.issues.append(
+                DataIssue(
+                    reason=DataAbsenceReason.UNKNOWN,
+                    details=str(e),
+                    severity=IssueSeverity.ERROR,
+                )
+            )
+
+
+            derivation_trace.traces.append(
+                trace
+            )
 
 def get_best_rainfall_intensity_record(
     *,

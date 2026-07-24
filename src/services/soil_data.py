@@ -250,7 +250,6 @@ def get_best_soil_texture_data(
     # --------------------------------------------------
 
     if limits:
-        print(df)
         df, interpolation_trace = interpolate_texture(
             original_texture=df,
             new_limits=limits,
@@ -258,7 +257,6 @@ def get_best_soil_texture_data(
             return_int=return_int,
             return_cumulative=return_cumulative,
         )
-        print(df)
         data_trace.traces.append(interpolation_trace)
 
     return df, root_trace
